@@ -69,12 +69,15 @@ app.MapWhen(context => context.Request.Path.StartsWithSegments("/ws"), wsApp =>
             var enabledSharedExperience = bool.Parse(query["enabledSharedExperience"].ToString());
             bool.TryParse(query["enabledSharedKills"].ToString(), out var enabledSharedKills); // Optional: older clients don't send it
 
-            // Optional, host decided difficulty multiplier. Invariant culture: the plugin always sends "1.3", never "1,3".
-            // Absent or malformed -> default, out of range -> clamped
-            var difficulty = DifficultyRange.Default;
-            if (float.TryParse(query["difficulty"].ToString(), NumberStyles.Float, CultureInfo.InvariantCulture, out var parsedDifficulty))
+            // Optional, host decided difficulty multipliers, one query parameter per enemy stat. Invariant culture: the plugin
+            // always sends "1.3", never "1,3". Absent or malformed -> default, out of range -> clamped
+            var difficulty = new DifficultySettings();
+            foreach (var stat in DifficultyRange.Stats)
             {
-                difficulty = DifficultyRange.Normalize(parsedDifficulty);
+                if (float.TryParse(query[DifficultyRange.QueryName(stat)].ToString(), NumberStyles.Float, CultureInfo.InvariantCulture, out var parsedMultiplier))
+                {
+                    difficulty.Set(stat, DifficultyRange.Normalize(stat, parsedMultiplier));
+                }
             }
 
             if (query.ContainsKey("random"))

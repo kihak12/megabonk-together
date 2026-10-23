@@ -12,6 +12,6 @@ namespace MegabonkTogether.Server.Models
         public string Name { get; internal set; }
         public bool EnabledSharedExperience { get; internal set; } = false;
         public bool EnabledSharedKills { get; internal set; } = false;
-        public float Difficulty { get; internal set; } = 1.0f;
+        public DifficultySettings Difficulty { get; internal set; } = new();
     }
 }

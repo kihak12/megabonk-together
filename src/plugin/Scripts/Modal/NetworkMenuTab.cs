@@ -5,6 +5,7 @@ using MegabonkTogether.Helpers;
 using MegabonkTogether.Scripts.Button;
 using MegabonkTogether.Scripts.Modal;
 using System.Collections;
+using System.Collections.Generic;
 using TMPro;
 using UnityEngine;
 using UnityEngine.Localization.Components;
@@ -49,15 +50,27 @@ namespace MegabonkTogether.Scripts
         private CustomButton sharedKillsToggleRightButton;
         private TextMeshProUGUI sharedKillsToggleStatusText;
 
-        //Difficulty row: a clone of the game's slider setting, polled in Update (UnityEvent listeners don't work under Il2Cpp)
+        //Difficulty page: one row per enemy stat, each a clone of the game's slider setting, polled in Update (UnityEvent listeners don't work under Il2Cpp)
         private const float DIFFICULTY_SAVE_DELAY_SECONDS = 0.5f;
-        private GameObject difficultySetting;
-        private Slider difficultySlider;
-        private TextMeshProUGUI difficultyValueText;
-        private int lastDifficultySteps;
-        private float pendingDifficulty;
-        private bool difficultyDirty;
-        private float difficultySettleTimer;
+        private const float DIFFICULTY_FIRST_ROW_Y = 110f;
+        private const float DIFFICULTY_ROW_PITCH = 60f;
+        private CustomButton difficultyOptionsButton;
+        private GameObject difficultyTitle;
+        private CustomButton difficultyResetButton;
+        private CustomButton difficultyBackButton;
+        private readonly List<DifficultyRow> difficultyRows = [];
+
+        private class DifficultyRow
+        {
+            public DifficultyStat Stat;
+            public GameObject Root;
+            public Slider Slider;
+            public TextMeshProUGUI ValueText;
+            public int LastSteps;
+            public float Pending;
+            public bool Dirty;
+            public float SettleTimer;
+        }
 
         protected void Awake()
         {
@@ -77,6 +90,7 @@ namespace MegabonkTogether.Scripts
             CreateStopButton();
             CreateFriendliesUI();
             CreateNetplayOptionsUI();
+            CreateDifficultyOptionsUI();
         }
 
         private void CreateCloseButton()
@@ -489,76 +503,117 @@ namespace MegabonkTogether.Scripts
         }
 
         /// <summary>
-        /// Difficulty row, cloned from the game's own slider setting so it keeps the game's look. The game's SliderSetting logic is
-        /// removed (a clone has no save action / settings object) and the slider is driven by polling in Update.
-        /// Whole numbers 5..20 displayed as steps/10 give exact 0.1 increments without float drift
+        /// Button on the Netplay options page that opens the difficulty page (five slider rows don't fit next to the toggles)
         /// </summary>
-        private void CreateDifficultySlider()
+        private void CreateDifficultyOptionsButton()
+        {
+            difficultyOptionsButton = CreateMenuButton("Difficulty", new Vector2(0, -125f), new Vector2(300, 60), OnDifficultyOptionsClicked);
+        }
+
+        /// <summary>
+        /// Difficulty page: a title, one slider row per enemy stat, a Reset button and a Back button. Each row is a clone of the game's own
+        /// slider setting so it keeps the game's look. The game's SliderSetting logic is removed from the clone (no save action / settings
+        /// object) and the slider is driven by polling in Update. Whole numbers displayed as steps/10 give exact 0.1 increments without float drift
+        /// </summary>
+        private void CreateDifficultyOptionsUI()
+        {
+            difficultyTitle = new GameObject("DifficultyTitle");
+            difficultyTitle.transform.SetParent(panel.transform, false);
+
+            var titleRect = difficultyTitle.AddComponent<RectTransform>();
+            titleRect.anchorMin = new Vector2(0.5f, 0.85f);
+            titleRect.anchorMax = new Vector2(0.5f, 0.85f);
+            titleRect.pivot = new Vector2(0.5f, 0.5f);
+            titleRect.anchoredPosition = Vector2.zero;
+            titleRect.sizeDelta = new Vector2(400, 60);
+
+            var titleText = difficultyTitle.AddComponent<TextMeshProUGUI>();
+            titleText.text = "Difficulty";
+            titleText.alignment = TextAlignmentOptions.Center;
+            titleText.fontSize = 60;
+            titleText.color = Color.white;
+
+            difficultyTitle.SetActive(false);
+
+            difficultyRows.Clear();
+            float rowY = DIFFICULTY_FIRST_ROW_Y;
+            foreach (var stat in DifficultyRange.Stats)
+            {
+                difficultyRows.Add(CreateDifficultyRow(stat, rowY));
+                rowY -= DIFFICULTY_ROW_PITCH;
+            }
+
+            difficultyResetButton = CreateMenuButton("Reset", new Vector2(-160f, -220f), new Vector2(260, 60), OnDifficultyResetClicked);
+            difficultyBackButton = CreateMenuButton("Back", new Vector2(160f, -220f), new Vector2(260, 60), OnDifficultyBackClicked);
+        }
+
+        private DifficultyRow CreateDifficultyRow(DifficultyStat stat, float y)
         {
             var settings = mainMenu.settings.GetComponent<Settings>();
             var settingPrefab = settings.GetSettingPrefab(SettingType.Slider);
 
-            difficultySetting = GameObject.Instantiate(settingPrefab, panel.transform);
+            var row = new DifficultyRow { Stat = stat };
+            row.Root = GameObject.Instantiate(settingPrefab, panel.transform);
+            row.Root.name = $"Difficulty_{stat}";
 
-            var rectTransform = difficultySetting.GetComponent<RectTransform>();
+            var rectTransform = row.Root.GetComponent<RectTransform>();
             rectTransform.anchorMin = new Vector2(0.5f, 0.5f);
             rectTransform.anchorMax = new Vector2(0.5f, 0.5f);
             rectTransform.pivot = new Vector2(0.5f, 0.5f);
-            rectTransform.anchoredPosition = new Vector2(0, -125);
+            rectTransform.anchoredPosition = new Vector2(0, y);
             rectTransform.sizeDelta = new Vector2(700, 60);
 
-            var sliderSetting = difficultySetting.GetComponent<SliderSetting>();
+            var sliderSetting = row.Root.GetComponent<SliderSetting>();
             if (sliderSetting != null)
             {
                 UnityEngine.Object.DestroyImmediate(sliderSetting);
             }
 
-            pendingDifficulty = DifficultyRange.Normalize(ModConfig.Difficulty.Value);
-            lastDifficultySteps = DifficultyHelper.ToSteps(pendingDifficulty);
-            difficultyDirty = false;
+            row.Pending = DifficultyRange.Normalize(stat, ModConfig.Difficulty[stat].Value);
+            row.LastSteps = DifficultyHelper.ToSteps(stat, row.Pending);
 
-            var textComponents = Il2CppFindHelper.RuntimeGetComponentsInChildren<TextMeshProUGUI>(difficultySetting);
+            var textComponents = Il2CppFindHelper.RuntimeGetComponentsInChildren<TextMeshProUGUI>(row.Root);
             foreach (var textComp in textComponents)
             {
                 if (textComp.name.StartsWith("Text"))
                 {
-                    textComp.text = "Difficulty (Host decides)\nEnemy HP, damage, speed, elites, enemy cap";
-                    textComp.fontSize = 18;
+                    textComp.text = DifficultyHelper.Label(stat);
+                    textComp.fontSize = 20;
                     textComp.enableWordWrapping = false;
                 }
             }
 
             //The prefab shows the value in an input field: hide it and put a plain label in its place (nothing extra to poll)
             RectTransform valueTemplateRect = null;
-            var inputFields = Il2CppFindHelper.RuntimeGetComponentsInChildren<TMP_InputField>(difficultySetting);
+            var inputFields = Il2CppFindHelper.RuntimeGetComponentsInChildren<TMP_InputField>(row.Root);
             foreach (var inputField in inputFields)
             {
                 valueTemplateRect ??= inputField.GetComponent<RectTransform>();
                 inputField.gameObject.SetActive(false);
             }
 
-            var sliders = Il2CppFindHelper.RuntimeGetComponentsInChildren<Slider>(difficultySetting);
+            var sliders = Il2CppFindHelper.RuntimeGetComponentsInChildren<Slider>(row.Root);
             foreach (var slider in sliders)
             {
-                difficultySlider = slider;
+                row.Slider = slider;
                 break;
             }
 
-            if (difficultySlider != null)
+            if (row.Slider != null)
             {
-                difficultySlider.onValueChanged = new(); //Same trick as btn.onClick: the serialized listeners targeted the destroyed SliderSetting
-                difficultySlider.wholeNumbers = true;
-                difficultySlider.minValue = DifficultyHelper.MinSteps;
-                difficultySlider.maxValue = DifficultyHelper.MaxSteps;
-                difficultySlider.SetValueWithoutNotify(lastDifficultySteps);
+                row.Slider.onValueChanged = new(); //Same trick as btn.onClick: the serialized listeners targeted the destroyed SliderSetting
+                row.Slider.wholeNumbers = true;
+                row.Slider.minValue = DifficultyHelper.MinSteps;
+                row.Slider.maxValue = DifficultyHelper.MaxSteps(stat);
+                row.Slider.SetValueWithoutNotify(row.LastSteps);
             }
             else
             {
-                Plugin.Log.LogWarning("No Slider found in the game's slider setting prefab: the difficulty row is read only");
+                Plugin.Log.LogWarning($"No Slider found in the game's slider setting prefab: the {stat} difficulty row is read only");
             }
 
             var valueObj = new GameObject("DifficultyValue");
-            valueObj.transform.SetParent(difficultySetting.transform, false);
+            valueObj.transform.SetParent(row.Root.transform, false);
             var valueRect = valueObj.AddComponent<RectTransform>();
             if (valueTemplateRect != null)
             {
@@ -577,64 +632,167 @@ namespace MegabonkTogether.Scripts
                 valueRect.sizeDelta = new Vector2(90, 40);
             }
 
-            difficultyValueText = valueObj.AddComponent<TextMeshProUGUI>();
-            difficultyValueText.text = DifficultyHelper.Format(pendingDifficulty);
-            difficultyValueText.alignment = TextAlignmentOptions.Center;
-            difficultyValueText.verticalAlignment = VerticalAlignmentOptions.Middle;
-            difficultyValueText.fontSize = 24;
-            difficultyValueText.color = Color.white;
-            difficultyValueText.enableWordWrapping = false;
+            row.ValueText = valueObj.AddComponent<TextMeshProUGUI>();
+            row.ValueText.text = DifficultyHelper.Format(row.Pending);
+            row.ValueText.alignment = TextAlignmentOptions.Center;
+            row.ValueText.verticalAlignment = VerticalAlignmentOptions.Middle;
+            row.ValueText.fontSize = 24;
+            row.ValueText.color = Color.white;
+            row.ValueText.enableWordWrapping = false;
 
-            difficultySetting.SetActive(false);
+            row.Root.SetActive(false);
+            return row;
         }
 
-        private void UpdateDifficultySlider()
+        private void UpdateDifficultySliders()
         {
-            if (difficultySlider == null || difficultySetting == null || !difficultySetting.activeSelf)
+            foreach (var row in difficultyRows)
             {
-                return;
-            }
-
-            int steps = (int)System.Math.Round(difficultySlider.value);
-            if (steps != lastDifficultySteps)
-            {
-                lastDifficultySteps = steps;
-                pendingDifficulty = DifficultyHelper.FromSteps(steps);
-                difficultyValueText.text = DifficultyHelper.Format(pendingDifficulty);
-                difficultyDirty = true;
-                difficultySettleTimer = DIFFICULTY_SAVE_DELAY_SECONDS;
-                return;
-            }
-
-            if (difficultyDirty)
-            {
-                difficultySettleTimer -= Time.deltaTime;
-                if (difficultySettleTimer <= 0f)
+                if (row.Slider == null || row.Root == null || !row.Root.activeSelf)
                 {
-                    FlushDifficulty();
+                    continue;
+                }
+
+                int steps = (int)System.Math.Round(row.Slider.value);
+                if (steps != row.LastSteps)
+                {
+                    row.LastSteps = steps;
+                    row.Pending = DifficultyHelper.FromSteps(row.Stat, steps);
+                    row.ValueText.text = DifficultyHelper.Format(row.Pending);
+                    row.Dirty = true;
+                    row.SettleTimer = DIFFICULTY_SAVE_DELAY_SECONDS;
+                    continue;
+                }
+
+                if (row.Dirty)
+                {
+                    row.SettleTimer -= Time.deltaTime;
+                    if (row.SettleTimer <= 0f)
+                    {
+                        FlushDifficulty();
+                    }
                 }
             }
         }
 
         /// <summary>
-        /// Write the slider value to the config. Deferred until the value settles: SaveOnConfigSet is on, so every ConfigEntry write hits the disk
+        /// Write the pending slider values to the config. Deferred until a value settles: SaveOnConfigSet is on, so every ConfigEntry write hits the disk
         /// </summary>
         private void FlushDifficulty()
         {
-            if (!difficultyDirty)
+            bool anyDirty = false;
+            foreach (var row in difficultyRows)
+            {
+                if (!row.Dirty)
+                {
+                    continue;
+                }
+
+                row.Dirty = false;
+                anyDirty = true;
+                ModConfig.Difficulty[row.Stat].Value = row.Pending;
+            }
+
+            if (!anyDirty)
             {
                 return;
             }
 
-            difficultyDirty = false;
-            ModConfig.Difficulty.Value = pendingDifficulty;
             ModConfig.Save();
-            Plugin.Log.LogInfo($"Difficulty set to {DifficultyHelper.Format(pendingDifficulty)}");
+            Plugin.Log.LogInfo($"Difficulty set to {DifficultyHelper.FromConfig().Format()}");
+        }
+
+        private void OnDifficultyOptionsClicked()
+        {
+            AudioManager.Instance.PlaySfx(AudioManager.Instance.uiSelect.sounds[0]);
+
+            UpdateNetplayOptionsUI(false);
+            UpdateDifficultyOptionsUI(true);
+        }
+
+        private void OnDifficultyBackClicked()
+        {
+            AudioManager.Instance.PlaySfx(AudioManager.Instance.uiSelect.sounds[0]);
+
+            FlushDifficulty();
+            UpdateDifficultyOptionsUI(false);
+            UpdateNetplayOptionsUI(true);
+        }
+
+        private void OnDifficultyResetClicked()
+        {
+            AudioManager.Instance.PlaySfx(AudioManager.Instance.uiSelect.sounds[0]);
+
+            foreach (var row in difficultyRows)
+            {
+                row.Pending = DifficultyRange.Default;
+                row.LastSteps = DifficultyHelper.ToSteps(row.Stat, row.Pending);
+                row.Slider?.SetValueWithoutNotify(row.LastSteps);
+                row.ValueText.text = DifficultyHelper.Format(row.Pending);
+                row.Dirty = true;
+            }
+
+            FlushDifficulty();
+        }
+
+        private void UpdateDifficultyOptionsUI(bool isVisible)
+        {
+            difficultyTitle.SetActive(isVisible);
+            foreach (var row in difficultyRows)
+            {
+                row.Root.SetActive(isVisible);
+            }
+            difficultyResetButton.gameObject.SetActive(isVisible);
+            difficultyBackButton.gameObject.SetActive(isVisible);
+        }
+
+        /// <summary>
+        /// A menu button cloned from the main menu Play button (same steps as the Close / Back buttons above), hidden until its page is shown
+        /// </summary>
+        private CustomButton CreateMenuButton(string text, Vector2 position, Vector2 size, System.Action onClick)
+        {
+            var buttonObj = GameObject.Instantiate(mainMenu.btnPlay.gameObject);
+            buttonObj.transform.SetParent(panel.transform, false);
+
+            var originalButton = buttonObj.GetComponent<MyButtonNormal>();
+            if (originalButton != null)
+            {
+                UnityEngine.Object.DestroyImmediate(originalButton);
+            }
+
+            var button = buttonObj.GetComponentInChildren<UnityEngine.UI.Button>();
+            if (button != null)
+            {
+                button.onClick = new();
+            }
+
+            var localizeStringEvent = buttonObj.GetComponentInChildren<LocalizeStringEvent>();
+            if (localizeStringEvent != null)
+            {
+                UnityEngine.Object.DestroyImmediate(localizeStringEvent);
+            }
+
+            var customButton = buttonObj.AddComponent<CustomButton>();
+            customButton.SetOnClickAction(onClick);
+
+            var textWrapper = buttonObj.GetComponent<ButtonTextWrapper>();
+            textWrapper.t_text.text = text;
+            textWrapper.t_text.fontSize = 30;
+
+            var rectTransform = buttonObj.GetComponent<RectTransform>();
+            rectTransform.anchorMin = new Vector2(0.5f, 0.5f);
+            rectTransform.anchorMax = new Vector2(0.5f, 0.5f);
+            rectTransform.pivot = new Vector2(0.5f, 0.5f);
+            rectTransform.anchoredPosition = position;
+            rectTransform.sizeDelta = size;
+
+            buttonObj.SetActive(false);
+            return customButton;
         }
 
         public override void OnDestroy()
         {
-            FlushDifficulty(); //The modal can be destroyed while the settle timer is still running
+            FlushDifficulty(); //The modal can be destroyed while a settle timer is still running
             base.OnDestroy();
         }
 
@@ -661,7 +819,7 @@ namespace MegabonkTogether.Scripts
             CreateSaveToggle();
             CreateSharedExpToggle();
             CreateSharedKillsToggle();
-            CreateDifficultySlider();
+            CreateDifficultyOptionsButton();
 
             var backButtonObj = GameObject.Instantiate(mainMenu.btnPlay.gameObject);
             backButtonObj.transform.SetParent(panel.transform, false);
@@ -1118,7 +1276,7 @@ namespace MegabonkTogether.Scripts
         {
             base.Update();
 
-            UpdateDifficultySlider();
+            UpdateDifficultySliders();
 
             if (playerNameInput == null) return;
 
@@ -1302,7 +1460,7 @@ namespace MegabonkTogether.Scripts
             saveToggleSetting.SetActive(isVisible);
             sharedExpToggleSetting.SetActive(isVisible);
             sharedKillsToggleSetting.SetActive(isVisible);
-            difficultySetting.SetActive(isVisible);
+            difficultyOptionsButton.gameObject.SetActive(isVisible);
             netplayOptionsBackButton.gameObject.SetActive(isVisible);
         }
 

@@ -19,6 +19,6 @@
         public string RoomCode { get; set; } = "";
         public bool? EnabledSharedExperience { get; set; } = null;
         public bool? EnabledSharedKills { get; set; } = null;
-        public float? Difficulty { get; set; } = null;
+        public DifficultySettings? Difficulty { get; set; } = null;
     }
 }

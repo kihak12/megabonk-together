@@ -1,4 +1,5 @@
 ﻿using MegabonkTogether.Common.Messages.WsMessages;
+using MegabonkTogether.Common.Models;
 using MemoryPack;
 
 namespace MegabonkTogether.Common.Messages
@@ -10,7 +11,7 @@ namespace MegabonkTogether.Common.Messages
         public uint Seed { get; set; }
         public bool EnabledSharedExperience { get; set; }
         public bool EnabledSharedKills { get; set; }
-        public float Difficulty { get; set; } = 1.0f;
+        public DifficultySettings Difficulty { get; set; } = new();
     }
 
     [MemoryPackable]

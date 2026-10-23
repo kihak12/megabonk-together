@@ -125,7 +125,7 @@ namespace MegabonkTogether.Server.Services
             }
         }
 
-        public async Task HandleRandomClientAsync(WebSocket ws, string? remoteAddress, int remoteWSPort, bool enabledSharedExperience, bool enabledSharedKills, float difficulty, CancellationToken token)
+        public async Task HandleRandomClientAsync(WebSocket ws, string? remoteAddress, int remoteWSPort, bool enabledSharedExperience, bool enabledSharedKills, DifficultySettings difficulty, CancellationToken token)
         {
             var id = ConnectionIdPool.NewId();
 
@@ -225,7 +225,7 @@ namespace MegabonkTogether.Server.Services
             string name,
             bool enabledSharedExperience,
             bool enabledSharedKills,
-            float difficulty,
+            DifficultySettings difficulty,
             CancellationToken token)
         {
             var id = ConnectionIdPool.NewId();
@@ -504,7 +504,7 @@ namespace MegabonkTogether.Server.Services
                 Difficulty = lobby.Host.Difficulty
             };
 
-            logger.LogInformation($"Friendlies match created: host={lobby.Host.Id}, client={client.Id}, seed={lobby.Seed}, difficulty={lobby.Host.Difficulty.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture)}");
+            logger.LogInformation($"Friendlies match created: host={lobby.Host.Id}, client={client.Id}, seed={lobby.Seed}, difficulty={lobby.Host.Difficulty.Format()}");
 
             foreach (var c in matchedClients)
             {
@@ -647,7 +647,7 @@ namespace MegabonkTogether.Server.Services
             randomMatchHosts[host.Id] = host.EnabledSharedExperience;
             metricsService.MatchCreated(host.EnabledSharedExperience, matchedClients.Count);
 
-            logger.LogInformation($"Match created with {matchedClients.Count} players: {string.Join(",", matchedClients.Select(c => c.Id))}, host: {host.Id}, difficulty: {host.Difficulty.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture)}");
+            logger.LogInformation($"Match created with {matchedClients.Count} players: {string.Join(",", matchedClients.Select(c => c.Id))}, host: {host.Id}, difficulty: {host.Difficulty.Format()}");
 
             IWsMessage msg = new MatchInfo
             {

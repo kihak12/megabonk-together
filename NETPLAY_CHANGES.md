@@ -43,16 +43,17 @@ Because those counters are not yours alone anymore, saving progression is forced
 
 ### Difficulty (netplay option)
 
-A slider in the Netplay options menu, from **0.5x** to **2.0x** in steps of 0.1 (1.0x is the balance described below). Like Shared Kills, the **host's value applies to the whole lobby**: it is sent to the matchmaking server when you connect and copied to every player, and a notification shows the lobby difficulty when the match is found. Changing it after connecting only affects your next session.
+A **Difficulty** page in the Netplay options menu with one slider per enemy stat, in steps of 0.1 (1.0x everywhere is the balance described below). Like Shared Kills, the **host's values apply to the whole lobby**: they are sent to the matchmaking server when you connect and copied to every player, and a notification shows the lobby difficulty when the match is found. Changing them after connecting only affects your next session. A Reset button puts everything back to 1.0x.
 
-What the multiplier `d` changes, on top of the player count scaling:
+| Slider | Range | What it multiplies |
+|---|---|---|
+| Enemy HP | 0.5x - 5.0x | Enemy HP, on top of the player count and stage scaling |
+| Enemy damage | 0.5x - 5.0x | Damage dealt to players |
+| Enemy speed | 0.5x - 2.0x | Movement speed (above 2x enemies outrun every character) |
+| Elite chance | 0.5x - 5.0x | Elite spawn chance, still capped at 100% by the game |
+| Max enemies | 0.5x - 2.0x | The spawn cap (500 / 600 by player count), hard capped at 1000 for frame rate. The Final Swarm cap stays at 400 |
 
-- Enemy HP, enemy damage and elite chance: multiplied by `d`
-- Enemy speed: multiplied by `1 + (d - 1) × 0.15` (2.0x gives +15%, 0.5x gives -7.5%; scaling speed fully would be unplayable)
-- Max spawnable enemies: multiplied by `1 + (d - 1) × 0.5`, capped at 800 (2.0x gives 750 for 2-3 players, 800 for 4-6). The Final Swarm cap stays at 400
-- Spawn credits: the formula includes `1 + (d - 1) × 0.05`, but the credits patch is currently disabled (FPS), so difficulty does not change the spawn rate yet
-
-XP, gold, chest spawn rate and lamp charge time are not affected.
+Spawn credits (spawn rate) are not scaled: that patch is currently disabled for FPS reasons. XP, gold, chest spawn rate and lamp charge time are not affected either.
 
 ## Custom game balance
 

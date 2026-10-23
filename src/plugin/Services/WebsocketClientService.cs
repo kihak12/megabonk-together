@@ -70,8 +70,8 @@ namespace MegabonkTogether.Services
         {
             var enabledSharedExperience = ModConfig.EnabledSharedExperience.Value;
             var enabledSharedKills = ModConfig.EnabledSharedKills.Value;
-            var difficulty = Helpers.DifficultyHelper.ToQueryString(ModConfig.Difficulty.Value); //Invariant culture: "1.3", never "1,3"
-            var uri = new System.Uri($"{serverUrl}/ws?random&enabledSharedExperience={enabledSharedExperience}&enabledSharedKills={enabledSharedKills}&difficulty={difficulty}");
+            var difficultyQuery = Helpers.DifficultyHelper.QueryString(); //One parameter per enemy stat, invariant culture
+            var uri = new System.Uri($"{serverUrl}/ws?random&enabledSharedExperience={enabledSharedExperience}&enabledSharedKills={enabledSharedKills}{difficultyQuery}");
 
             await ws.ConnectAsync(uri, token);
             networkHandler.OnConnectedToMatchMaker();
@@ -120,8 +120,8 @@ namespace MegabonkTogether.Services
             var code = Plugin.Instance.Mode.RoomCode;
             var enabledSharedExperience = ModConfig.EnabledSharedExperience.Value;
             var enabledSharedKills = ModConfig.EnabledSharedKills.Value;
-            var difficulty = Helpers.DifficultyHelper.ToQueryString(ModConfig.Difficulty.Value); //Invariant culture: "1.3", never "1,3"
-            var uri = new System.Uri($"{serverUrl}/ws?friendlies&role={role}&code={code}&name={ModConfig.PlayerName.Value}&enabledSharedExperience={enabledSharedExperience}&enabledSharedKills={enabledSharedKills}&difficulty={difficulty}");
+            var difficultyQuery = Helpers.DifficultyHelper.QueryString(); //One parameter per enemy stat, invariant culture
+            var uri = new System.Uri($"{serverUrl}/ws?friendlies&role={role}&code={code}&name={ModConfig.PlayerName.Value}&enabledSharedExperience={enabledSharedExperience}&enabledSharedKills={enabledSharedKills}{difficultyQuery}");
 
             await ws.ConnectAsync(uri, token);
             networkHandler.OnConnectedToMatchMaker();

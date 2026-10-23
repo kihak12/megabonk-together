@@ -1132,12 +1132,12 @@ namespace MegabonkTogether.Services
                 Plugin.Instance.Mode.EnabledSharedKills = matchInfo.EnabledSharedKills; //The host's value, copied by the server
             }
 
-            if (!Plugin.Instance.Mode.Difficulty.HasValue)
+            if (Plugin.Instance.Mode.Difficulty == null)
             {
-                Plugin.Instance.Mode.Difficulty = DifficultyRange.Normalize(matchInfo.Difficulty); //The host's value, copied by the server
+                Plugin.Instance.Mode.Difficulty = (matchInfo.Difficulty ?? new DifficultySettings()).Normalized(); //The host's values, copied by the server
             }
 
-            var lobbyDifficultyText = Helpers.DifficultyHelper.Format(Plugin.Instance.Mode.Difficulty.Value);
+            var lobbyDifficultyText = Plugin.Instance.Mode.Difficulty.Format();
             Plugin.Log.LogInfo($"[Lobby] Shared Experience: {Plugin.Instance.Mode.EnabledSharedExperience}, Shared Kills: {Plugin.Instance.Mode.EnabledSharedKills}, Difficulty: {lobbyDifficultyText}");
 
             //Random matchmaking never shows the host's options anywhere else: tell everyone which difficulty they landed in

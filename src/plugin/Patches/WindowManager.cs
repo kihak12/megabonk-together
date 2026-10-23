@@ -247,10 +247,10 @@ namespace MegabonkTogether.Patches
                 text.text += $"\nShared Kills: {sharedKillsStatus}";
             }
 
-            var difficultyValue = Plugin.Instance.Mode.Role == Role.Host ? ModConfig.Difficulty.Value : Plugin.Instance.Mode.Difficulty;
-            if (difficultyValue.HasValue)
+            var difficultyValue = Plugin.Instance.Mode.Role == Role.Host ? DifficultyHelper.FromConfig() : Plugin.Instance.Mode.Difficulty;
+            if (difficultyValue != null)
             {
-                text.text += $"\nDifficulty: {DifficultyHelper.Format(difficultyValue.Value)}";
+                text.text += "\n" + DifficultyHelper.FormatForOverlay(difficultyValue);
             }
             text.enableWordWrapping = false;
             text.alignment = TextAlignmentOptions.TopLeft;

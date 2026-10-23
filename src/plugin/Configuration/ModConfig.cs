@@ -1,4 +1,6 @@
 using BepInEx.Configuration;
+using MegabonkTogether.Common.Models;
+using System.Collections.Generic;
 
 namespace MegabonkTogether.Configuration
 {
@@ -17,7 +19,10 @@ namespace MegabonkTogether.Configuration
         public static ConfigEntry<bool> AllowSavesDuringNetplay { get; private set; }
         public static ConfigEntry<bool> EnabledSharedExperience { get; private set; }
         public static ConfigEntry<bool> EnabledSharedKills { get; private set; }
-        public static ConfigEntry<float> Difficulty { get; private set; }
+        /// <summary>
+        /// One multiplier per enemy stat (keys DifficultyEnemyHp, DifficultyEnemyDamage, ...). Decided by the host for the whole lobby
+        /// </summary>
+        public static IReadOnlyDictionary<DifficultyStat, ConfigEntry<float>> Difficulty { get; private set; }
         public static ConfigEntry<bool> ForceRelay { get; private set; }
 
         public static void Initialize(ConfigFile config)
@@ -84,15 +89,20 @@ namespace MegabonkTogether.Configuration
                 false,
                 "Share the kill counter (HUD and end of run stats) across all players. Decided by the host for the whole lobby. Forces AllowSavesDuringNetplay off."
             );
-            Difficulty = config.Bind(
-                "Gameplay",
-                "Difficulty",
-                1.0f,
-                new ConfigDescription(
-                    "Enemy difficulty multiplier (0.5 - 2.0, steps of 0.1): scales enemy HP, damage, speed, elite chance and the enemy cap. Decided by the host for the whole lobby.",
-                    new AcceptableValueRange<float>(0.5f, 2.0f)
-                )
-            );
+            var difficultyEntries = new Dictionary<DifficultyStat, ConfigEntry<float>>();
+            foreach (var stat in DifficultyRange.Stats)
+            {
+                difficultyEntries[stat] = config.Bind(
+                    "Gameplay",
+                    "Difficulty" + stat,
+                    DifficultyRange.Default,
+                    new ConfigDescription(
+                        $"{Helpers.DifficultyHelper.Label(stat)} multiplier ({DifficultySettings.FormatMultiplier(DifficultyRange.Min)} to {DifficultySettings.FormatMultiplier(DifficultyRange.Max(stat))}, steps of 0.1). Decided by the host for the whole lobby.",
+                        new AcceptableValueRange<float>(DifficultyRange.Min, DifficultyRange.Max(stat))
+                    )
+                );
+            }
+            Difficulty = difficultyEntries;
         }
 
         public static void Save()
