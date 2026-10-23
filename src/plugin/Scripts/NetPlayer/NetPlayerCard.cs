@@ -41,10 +41,15 @@ namespace MegabonkTogether.Scripts.NetPlayer
         private const float BAR_LATENCY_GAP_RATIO = 0.04f;
 
         private IUdpClientService udpClientService;
+        private IPlayerManagerService playerManagerService;
+
+        private const float LATENCY_REFRESH_INTERVAL_SECONDS = 0.25f;
+        private float latencyRefreshTimer = 0f;
 
         protected void Awake()
         {
             udpClientService = Plugin.Services.GetService<IUdpClientService>();
+            playerManagerService = Plugin.Services.GetService<IPlayerManagerService>();
         }
 
         public void Initialize(Player player, RawImage iconTemplate, Transform parent, float cardHeight)
@@ -378,11 +383,20 @@ namespace MegabonkTogether.Scripts.NetPlayer
             previousShield = Inventory.playerHealth.shield;
         }
 
+        /// <summary>
+        /// Ping shown on the card: the round trip between that player and the host, measured by the host (Player.Latency).
+        /// On a client the host's card shows the local player's own round trip. Falls back to LiteNetLib's direct link
+        /// latency (one way, so doubled) until the first probe answers
+        /// </summary>
         private void UpdateLatency()
         {
-            if (latencyText == null || udpClientService == null) return;
+            if (latencyText == null || udpClientService == null || Player == null) return;
 
-            int latency = udpClientService.GetLatency(Player.ConnectionId);
+            latencyRefreshTimer -= Time.deltaTime;
+            if (latencyRefreshTimer > 0f) return;
+            latencyRefreshTimer = LATENCY_REFRESH_INTERVAL_SECONDS;
+
+            int latency = GetDisplayedLatency();
 
             if (latency <= 0)
             {
@@ -393,15 +407,15 @@ namespace MegabonkTogether.Scripts.NetPlayer
             latencyText.gameObject.SetActive(true);
             latencyText.text = $"{latency}ms";
 
-            if (latency < 50)
+            if (latency < 60)
             {
                 latencyText.color = Color.green;
             }
-            else if (latency < 100)
+            else if (latency < 120)
             {
                 latencyText.color = new Color(0.5f, 1f, 0f);
             }
-            else if (latency < 200)
+            else if (latency < 220)
             {
                 latencyText.color = Color.yellow;
             }
@@ -409,6 +423,28 @@ namespace MegabonkTogether.Scripts.NetPlayer
             {
                 latencyText.color = Color.red;
             }
+        }
+
+        private int GetDisplayedLatency()
+        {
+            //Clients get a fresh Player instance with every LobbyUpdates, the one captured at creation goes stale
+            var current = playerManagerService?.GetPlayer(Player.ConnectionId) ?? Player;
+            bool localIsHost = udpClientService.IsHost() ?? false;
+
+            int latency = !localIsHost && current.IsHost
+                ? playerManagerService?.GetLocalPlayer()?.Latency ?? 0 //Host card on a client: my own round trip to the host
+                : current.Latency; //Host: measured directly. Client: that peer's round trip to the host
+
+            if (latency <= 0)
+            {
+                var oneWay = udpClientService.GetLatency(Player.ConnectionId); //Direct links only, about half a round trip
+                if (oneWay > 0)
+                {
+                    latency = oneWay * 2;
+                }
+            }
+
+            return latency;
         }
 
         public RectTransform GetRectTransform()

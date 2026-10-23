@@ -125,7 +125,7 @@ namespace MegabonkTogether.Server.Services
             }
         }
 
-        public async Task HandleRandomClientAsync(WebSocket ws, string? remoteAddress, int remoteWSPort, bool enabledSharedExperience, bool enabledSharedKills, CancellationToken token)
+        public async Task HandleRandomClientAsync(WebSocket ws, string? remoteAddress, int remoteWSPort, bool enabledSharedExperience, bool enabledSharedKills, float difficulty, CancellationToken token)
         {
             var id = ConnectionIdPool.NewId();
 
@@ -135,7 +135,8 @@ namespace MegabonkTogether.Server.Services
                 QueueId = "random",
                 Id = id,
                 EnabledSharedExperience = enabledSharedExperience,
-                EnabledSharedKills = enabledSharedKills
+                EnabledSharedKills = enabledSharedKills,
+                Difficulty = difficulty
             };
 
             clients[id] = client;
@@ -224,6 +225,7 @@ namespace MegabonkTogether.Server.Services
             string name,
             bool enabledSharedExperience,
             bool enabledSharedKills,
+            float difficulty,
             CancellationToken token)
         {
             var id = ConnectionIdPool.NewId();
@@ -242,7 +244,8 @@ namespace MegabonkTogether.Server.Services
                 Role = role,
                 Name = name,
                 EnabledSharedExperience = enabledSharedExperience,
-                EnabledSharedKills = enabledSharedKills
+                EnabledSharedKills = enabledSharedKills,
+                Difficulty = difficulty
             };
 
             clients[id] = client;
@@ -497,10 +500,11 @@ namespace MegabonkTogether.Server.Services
                 }).ToList(),
                 Seed = lobby.Seed,
                 EnabledSharedExperience = lobby.Host.EnabledSharedExperience,
-                EnabledSharedKills = lobby.Host.EnabledSharedKills
+                EnabledSharedKills = lobby.Host.EnabledSharedKills,
+                Difficulty = lobby.Host.Difficulty
             };
 
-            logger.LogInformation($"Friendlies match created: host={lobby.Host.Id}, client={client.Id}, seed={lobby.Seed}");
+            logger.LogInformation($"Friendlies match created: host={lobby.Host.Id}, client={client.Id}, seed={lobby.Seed}, difficulty={lobby.Host.Difficulty.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture)}");
 
             foreach (var c in matchedClients)
             {
@@ -643,7 +647,7 @@ namespace MegabonkTogether.Server.Services
             randomMatchHosts[host.Id] = host.EnabledSharedExperience;
             metricsService.MatchCreated(host.EnabledSharedExperience, matchedClients.Count);
 
-            logger.LogInformation($"Match created with {matchedClients.Count} players: {string.Join(",", matchedClients.Select(c => c.Id))}, host: {host.Id}");
+            logger.LogInformation($"Match created with {matchedClients.Count} players: {string.Join(",", matchedClients.Select(c => c.Id))}, host: {host.Id}, difficulty: {host.Difficulty.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture)}");
 
             IWsMessage msg = new MatchInfo
             {
@@ -655,7 +659,8 @@ namespace MegabonkTogether.Server.Services
                 }).ToList(),
                 Seed = (uint)Random.Shared.Next(),
                 EnabledSharedExperience = host.EnabledSharedExperience,
-                EnabledSharedKills = host.EnabledSharedKills
+                EnabledSharedKills = host.EnabledSharedKills,
+                Difficulty = host.Difficulty
             };
 
             foreach (var c in matchedClients)

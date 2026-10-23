@@ -23,6 +23,7 @@ namespace MegabonkTogether.Common.Models
         //public uint Xp = 0;
         public uint Shield = 0;
         public uint MaxShield = 0;
+        public int Latency = 0; // Round trip to the host in ms, measured by the host. 0 = unknown
 
     }
 }

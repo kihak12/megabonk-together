@@ -17,6 +17,8 @@ namespace MegabonkTogether.Configuration
         public static ConfigEntry<bool> AllowSavesDuringNetplay { get; private set; }
         public static ConfigEntry<bool> EnabledSharedExperience { get; private set; }
         public static ConfigEntry<bool> EnabledSharedKills { get; private set; }
+        public static ConfigEntry<float> Difficulty { get; private set; }
+        public static ConfigEntry<bool> ForceRelay { get; private set; }
 
         public static void Initialize(ConfigFile config)
         {
@@ -45,6 +47,12 @@ namespace MegabonkTogether.Configuration
                 "RDVServerPort",
                 (uint)5678,
                 "The port of the relay server. Do not change this unless you know what you're doing"
+            );
+            ForceRelay = config.Bind(
+                "Network",
+                "ForceRelay",
+                false,
+                "Testing only: skip the direct peer to peer attempt and always go through the relay server."
             );
             ShowChangelog = config.Bind(
                 "Updates",
@@ -75,6 +83,15 @@ namespace MegabonkTogether.Configuration
                 "EnabledSharedKills",
                 false,
                 "Share the kill counter (HUD and end of run stats) across all players. Decided by the host for the whole lobby. Forces AllowSavesDuringNetplay off."
+            );
+            Difficulty = config.Bind(
+                "Gameplay",
+                "Difficulty",
+                1.0f,
+                new ConfigDescription(
+                    "Enemy difficulty multiplier (0.5 - 2.0, steps of 0.1): scales enemy HP, damage, speed, elite chance and the enemy cap. Decided by the host for the whole lobby.",
+                    new AcceptableValueRange<float>(0.5f, 2.0f)
+                )
             );
         }
 

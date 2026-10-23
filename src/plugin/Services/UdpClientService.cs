@@ -108,6 +108,12 @@ namespace MegabonkTogether.Services
         private ConcurrentDictionary<string, bool> tokens = new();
         private bool hasTriedForceRelay = false;
 
+        //Host only: round trip probes to every client, the result rides in Player.Latency inside the lobby updates
+        private const int LATENCY_PROBE_INTERVAL_MS = 1000;
+        private const int LATENCY_PROBE_MAX_AGE_MS = 10_000;
+        private const float LATENCY_EMA_KEEP = 0.7f;
+        private long lastLatencyProbeSentMs = 0;
+
         private const int POLL_INTERVAL_MS = 5;
 
         private CancellationTokenSource pollingCancelationTokenSource;
@@ -727,6 +733,11 @@ namespace MegabonkTogether.Services
                     case XpSync xpSync:
                         EventManager.OnXpSync(xpSync);
                         break;
+                    case LatencyProbe latencyProbe:
+                        //Pure echo for the host's round trip measurement: no event, nothing applied locally
+                        latencyProbe.OwnerId = selfConnectionId ?? 0;
+                        SendToHost(latencyProbe, DeliveryMethod.Unreliable);
+                        break;
                     default:
                         Plugin.Log.LogWarning($"Unknown message type received. message={message}");
                         break;
@@ -1010,6 +1021,10 @@ namespace MegabonkTogether.Services
                         EventManager.OnXpSync(xpSync);
                         SendToAllClientsExcept(netPeerId, xpSync.OwnerId, xpSync);
                         break;
+                    case LatencyProbe latencyProbe:
+                        //Not relayed on purpose: a point to point measurement, not game state. The value reaches the clients through LobbyUpdates
+                        OnLatencyProbeEcho(latencyProbe);
+                        break;
                     default:
                         Plugin.Log.LogWarning($"Unknown message type received {message}");
                         break;
@@ -1031,6 +1046,7 @@ namespace MegabonkTogether.Services
             gamePeersIntroduced.Clear();
             gamePeersIntroducedByRelay.Clear();
             hasTriedForceRelay = false;
+            lastLatencyProbeSentMs = 0;
 
             lock (relayPeerLock)
             {
@@ -1116,7 +1132,23 @@ namespace MegabonkTogether.Services
                 Plugin.Instance.Mode.EnabledSharedKills = matchInfo.EnabledSharedKills; //The host's value, copied by the server
             }
 
-            Plugin.Log.LogInfo($"[Lobby] Shared Experience: {Plugin.Instance.Mode.EnabledSharedExperience}, Shared Kills: {Plugin.Instance.Mode.EnabledSharedKills}");
+            if (!Plugin.Instance.Mode.Difficulty.HasValue)
+            {
+                Plugin.Instance.Mode.Difficulty = DifficultyRange.Normalize(matchInfo.Difficulty); //The host's value, copied by the server
+            }
+
+            var lobbyDifficultyText = Helpers.DifficultyHelper.Format(Plugin.Instance.Mode.Difficulty.Value);
+            Plugin.Log.LogInfo($"[Lobby] Shared Experience: {Plugin.Instance.Mode.EnabledSharedExperience}, Shared Kills: {Plugin.Instance.Mode.EnabledSharedKills}, Difficulty: {lobbyDifficultyText}");
+
+            //Random matchmaking never shows the host's options anywhere else: tell everyone which difficulty they landed in
+            Scripts.MainThreadDispatcher.Enqueue(() =>
+            {
+                Plugin.StartNotification(
+                    ("MegabonkTogether", "LobbyDifficulty"),
+                    ("MegabonkTogether", "LobbyDifficultyDesc"),
+                    [lobbyDifficultyText]
+                );
+            });
 
             var allPlayers = playerManagerService.GetAllPlayers();
             foreach (var peer in matchInfo.Peers)
@@ -1146,6 +1178,14 @@ namespace MegabonkTogether.Services
             var hostId = matchInfo.Peers.First(p => p.IsHost == true).ConnectionId.ToString();
 
             var uniqueToken = $"{role}|{hostId}|{selfConnectionId}";
+
+            if (Configuration.ModConfig.ForceRelay.Value)
+            {
+                //Testing only: the rendezvous server skips the NAT punch and relays everything for this peer
+                uniqueToken += "|force_relay";
+                hasTriedForceRelay = true; //Already on relay: no second attempt on timeout
+                Plugin.Log.LogWarning("ForceRelay is enabled in the config: going through the relay server");
+            }
 
             Plugin.Log.LogInfo($"Sending NAT punch request to rendezvous server with token {uniqueToken}");
 
@@ -1308,6 +1348,7 @@ namespace MegabonkTogether.Services
                 }
 
                 SendLobbyUpdate();
+                SendLatencyProbeIfDue();
             }
             else
             {
@@ -1395,6 +1436,58 @@ namespace MegabonkTogether.Services
             player.Name = localPlayer.Name;
 
             playerManagerService.UpdatePlayer(player);
+        }
+
+        /// <summary>
+        /// Host only, once per second: broadcast a probe stamped with our clock. Every client echoes it back
+        /// (see the LatencyProbe case of the client branch) and OnLatencyProbeEcho turns the echo into a round trip
+        /// </summary>
+        private void SendLatencyProbeIfDue()
+        {
+            var now = Environment.TickCount64;
+            if (now - lastLatencyProbeSentMs < LATENCY_PROBE_INTERVAL_MS)
+            {
+                return;
+            }
+
+            lastLatencyProbeSentMs = now;
+
+            if (gamePeers.IsEmpty && usesRelay.Count == 0)
+            {
+                return;
+            }
+
+            IGameNetworkMessage probe = new LatencyProbe
+            {
+                OwnerId = selfConnectionId ?? 0,
+                SentAtMs = now
+            };
+
+            SendToAllClients(probe, DeliveryMethod.Unreliable);
+        }
+
+        /// <summary>
+        /// Host only: an echoed probe gives the round trip to that client. Smoothed and stored on the host's Player instance,
+        /// which the next LobbyUpdates ships to everyone (clients then read it from PlayerManagerService)
+        /// </summary>
+        private void OnLatencyProbeEcho(LatencyProbe probe)
+        {
+            var elapsed = Environment.TickCount64 - probe.SentAtMs;
+            if (elapsed < 0 || elapsed > LATENCY_PROBE_MAX_AGE_MS)
+            {
+                return;
+            }
+
+            var player = playerManagerService.GetPlayer(probe.OwnerId);
+            if (player == null)
+            {
+                return;
+            }
+
+            var rtt = Math.Max(1, (int)elapsed); //1 rather than 0 so a LAN peer reads "1ms" instead of "unknown"
+            player.Latency = player.Latency <= 0
+                ? rtt
+                : Math.Max(1, (int)Math.Round(player.Latency * LATENCY_EMA_KEEP + rtt * (1f - LATENCY_EMA_KEEP)));
         }
 
         private void SendLobbyUpdate()

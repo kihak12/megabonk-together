@@ -32,7 +32,9 @@ namespace MegabonkTogether.Services
             { ("MegabonkTogether", "FriendliesClientJoinSuccessDesc"), "{0} joined " },
             { ("MegabonkTogether", "XpSync"), "XP sync" },
             { ("MegabonkTogether", "XpSyncRequestedDesc"), "Asked the other players to synchronize XP" },
-            { ("MegabonkTogether", "XpSyncedDesc"), "XP synchronized with {0}: now level {1}" }
+            { ("MegabonkTogether", "XpSyncedDesc"), "XP synchronized with {0}: now level {1}" },
+            { ("MegabonkTogether", "LobbyDifficulty"), "Difficulty" },
+            { ("MegabonkTogether", "LobbyDifficultyDesc"), "Lobby difficulty: {0}" }
         };
 
         private readonly Queue<IEnumerable<string>> NextLocalizedDescription = new();

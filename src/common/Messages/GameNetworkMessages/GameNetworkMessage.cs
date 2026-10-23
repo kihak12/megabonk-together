@@ -73,6 +73,7 @@ namespace MegabonkTogether.Common.Messages
     [MemoryPackUnion(66, typeof(CloseEncounter))]
     [MemoryPackUnion(67, typeof(GoldChanged))]
     [MemoryPackUnion(68, typeof(XpSync))]
+    [MemoryPackUnion(69, typeof(LatencyProbe))]
     public partial interface IGameNetworkMessage
     {
 

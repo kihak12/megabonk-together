@@ -246,6 +246,12 @@ namespace MegabonkTogether.Patches
 
                 text.text += $"\nShared Kills: {sharedKillsStatus}";
             }
+
+            var difficultyValue = Plugin.Instance.Mode.Role == Role.Host ? ModConfig.Difficulty.Value : Plugin.Instance.Mode.Difficulty;
+            if (difficultyValue.HasValue)
+            {
+                text.text += $"\nDifficulty: {DifficultyHelper.Format(difficultyValue.Value)}";
+            }
             text.enableWordWrapping = false;
             text.alignment = TextAlignmentOptions.TopLeft;
             text.fontSize = 36;

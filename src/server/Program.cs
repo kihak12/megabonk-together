@@ -1,5 +1,6 @@
 ﻿using MegabonkTogether.Common.Models;
 using MegabonkTogether.Server;
+using System.Globalization;
 using MegabonkTogether.Server.Services;
 using Microsoft.AspNetCore.HttpOverrides;
 using OpenTelemetry.Metrics;
@@ -68,6 +69,14 @@ app.MapWhen(context => context.Request.Path.StartsWithSegments("/ws"), wsApp =>
             var enabledSharedExperience = bool.Parse(query["enabledSharedExperience"].ToString());
             bool.TryParse(query["enabledSharedKills"].ToString(), out var enabledSharedKills); // Optional: older clients don't send it
 
+            // Optional, host decided difficulty multiplier. Invariant culture: the plugin always sends "1.3", never "1,3".
+            // Absent or malformed -> default, out of range -> clamped
+            var difficulty = DifficultyRange.Default;
+            if (float.TryParse(query["difficulty"].ToString(), NumberStyles.Float, CultureInfo.InvariantCulture, out var parsedDifficulty))
+            {
+                difficulty = DifficultyRange.Normalize(parsedDifficulty);
+            }
+
             if (query.ContainsKey("random"))
             {
                 await handler.HandleRandomClientAsync(webSocket,
@@ -75,6 +84,7 @@ app.MapWhen(context => context.Request.Path.StartsWithSegments("/ws"), wsApp =>
                     context.Connection.RemotePort,
                     enabledSharedExperience,
                     enabledSharedKills,
+                    difficulty,
                     cts.Token);
             }
             else if (query.ContainsKey("friendlies"))
@@ -91,6 +101,7 @@ app.MapWhen(context => context.Request.Path.StartsWithSegments("/ws"), wsApp =>
                     name,
                     enabledSharedExperience,
                     enabledSharedKills,
+                    difficulty,
                     cts.Token);
             }
             else

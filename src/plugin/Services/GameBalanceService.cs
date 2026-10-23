@@ -40,6 +40,11 @@ namespace MegabonkTogether.Services
         private const float damageScalingPerAdditionalPlayer = 0.1f;
         private const float eliteChanceScalingPerAdditionalPlayer = 0.15f;
         private const float speedScalingPerAdditionalPlayer = 0.03f;
+        private const float speedScalingPerDifficulty = 0.15f; //Difficulty 2.0x -> +15% speed, 0.5x -> -7.5%: scaling speed fully would be unplayable
+        private const float enemyCapScalingPerDifficulty = 0.5f; //Difficulty 2.0x -> +50% enemy cap, 0.5x -> -25%
+        private const float creditsScalingPerDifficulty = 0.05f; //Only matters if the BaseSummoner credits patch is re enabled
+        private const int maxEnemiesHardCap = 800; //FPS safety net whatever the difficulty
+        private static float Difficulty => Helpers.DifficultyHelper.GetMultiplier(); //Host decided lobby option, same value on every peer
         private int playersCountAtStageStart = 0; //Connected players when the stage started: damage, elites and speed don't drop when someone dies
         private int PlayersCount => playerManagerService.GetAllPlayersAlive().Count();
         private int ConnectedPlayersCount => playersCountAtStageStart > 0 ? playersCountAtStageStart : playerManagerService.GetAllPlayers().Count();
@@ -54,11 +59,13 @@ namespace MegabonkTogether.Services
                 return 400; // Keep the original cap during Final Swarm
             }
 
-            return GetDifficultyLevelByPlayers() switch
+            int baseCap = GetDifficultyLevelByPlayers() switch
             {
                 DifficultyLevel.Quad or DifficultyLevel.Five or DifficultyLevel.Six => 600,
                 _ => 500,
             };
+
+            return Math.Min(maxEnemiesHardCap, (int)Math.Round(baseCap * DifficultyScaling(enemyCapScalingPerDifficulty)));
         }
 
         public float GetCreditsTimerMultiplier()
@@ -81,7 +88,7 @@ namespace MegabonkTogether.Services
                 _ => 1.0f
             };
 
-            return baseMultiplier * stageMultiplier;
+            return baseMultiplier * stageMultiplier * DifficultyScaling(creditsScalingPerDifficulty);
         }
 
         public float GetEnemyHpMultiplier(EEnemyFlag enemyFlag)
@@ -107,22 +114,30 @@ namespace MegabonkTogether.Services
                 _ => 1.0f
             };
 
-            return baseMultiplier * playerScaling * stageMultiplier;
+            return baseMultiplier * playerScaling * stageMultiplier * Difficulty;
         }
 
         public float GetEnemyDamageMultiplier()
         {
-            return 1f + AdditionalPlayers(ConnectedPlayersCount) * damageScalingPerAdditionalPlayer;
+            return (1f + AdditionalPlayers(ConnectedPlayersCount) * damageScalingPerAdditionalPlayer) * Difficulty;
         }
 
         public float GetEnemySpeedMultiplier()
         {
-            return 1f + AdditionalPlayers(ConnectedPlayersCount) * speedScalingPerAdditionalPlayer;
+            return (1f + AdditionalPlayers(ConnectedPlayersCount) * speedScalingPerAdditionalPlayer) * DifficultyScaling(speedScalingPerDifficulty);
         }
 
         public float GetEliteChanceMultiplier()
         {
-            return 1f + AdditionalPlayers(ConnectedPlayersCount) * eliteChanceScalingPerAdditionalPlayer;
+            return (1f + AdditionalPlayers(ConnectedPlayersCount) * eliteChanceScalingPerAdditionalPlayer) * Difficulty;
+        }
+
+        /// <summary>
+        /// Damped difficulty factor: 1 at 1.0x, moving by sensitivity for each +1.0 of difficulty (0.5 -> 1 + 0.5 * sensitivity at 2.0x)
+        /// </summary>
+        private static float DifficultyScaling(float sensitivity)
+        {
+            return 1f + (Difficulty - 1f) * sensitivity;
         }
 
         private static int AdditionalPlayers(int playersCount)
@@ -177,6 +192,7 @@ namespace MegabonkTogether.Services
             Plugin.Log.LogInfo($"[GameBalance] Credits Timer Multiplier (Disabled): {creditsMultiplier:F2}x");
             Plugin.Log.LogInfo($"[GameBalance] Basic Enemy HP Base Multiplier: {enemyHpMultiplier:F2}x");
             Plugin.Log.LogInfo($"[GameBalance] Enemy Damage Multiplier: {GetEnemyDamageMultiplier():F2}x, Speed: {GetEnemySpeedMultiplier():F2}x, Elite Chance: {GetEliteChanceMultiplier():F2}x");
+            Plugin.Log.LogInfo($"[GameBalance] Difficulty option: {Helpers.DifficultyHelper.Format(Difficulty)} -> HP x{Difficulty:F2}, Damage x{Difficulty:F2}, Speed x{DifficultyScaling(speedScalingPerDifficulty):F2}, Elite chance x{Difficulty:F2}, Enemy cap x{DifficultyScaling(enemyCapScalingPerDifficulty):F2}");
             Plugin.Log.LogInfo($"[GameBalance] Free Chest Spawn Rate Multiplier: {chestSpawnMultiplier:F2}x");
 
             if (Plugin.Instance.Mode.EnabledSharedExperience.HasValue && !Plugin.Instance.Mode.EnabledSharedExperience.Value)
