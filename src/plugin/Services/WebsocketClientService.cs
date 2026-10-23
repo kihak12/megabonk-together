@@ -32,6 +32,7 @@ namespace MegabonkTogether.Services
         private string currentServerUrl;
         private uint currentRdvServerPort;
         private bool isMessageLoopRunning = false;
+        private static readonly TimeSpan CLOSE_TIMEOUT = TimeSpan.FromSeconds(2);
 
 
         public async Task ConnectAndMatchAsync(string serverUrl, uint rdvServerPort, NetworkHandler networkHandler)
@@ -68,7 +69,8 @@ namespace MegabonkTogether.Services
         private async Task ConnectRandomAsync(string serverUrl, uint rdvServerPort, NetworkHandler networkHandler)
         {
             var enabledSharedExperience = ModConfig.EnabledSharedExperience.Value;
-            var uri = new System.Uri($"{serverUrl}/ws?random&enabledSharedExperience={enabledSharedExperience}");
+            var enabledSharedKills = ModConfig.EnabledSharedKills.Value;
+            var uri = new System.Uri($"{serverUrl}/ws?random&enabledSharedExperience={enabledSharedExperience}&enabledSharedKills={enabledSharedKills}");
 
             await ws.ConnectAsync(uri, token);
             networkHandler.OnConnectedToMatchMaker();
@@ -116,7 +118,8 @@ namespace MegabonkTogether.Services
             var role = Plugin.Instance.Mode.Role;
             var code = Plugin.Instance.Mode.RoomCode;
             var enabledSharedExperience = ModConfig.EnabledSharedExperience.Value;
-            var uri = new System.Uri($"{serverUrl}/ws?friendlies&role={role}&code={code}&name={ModConfig.PlayerName.Value}&enabledSharedExperience={enabledSharedExperience}");
+            var enabledSharedKills = ModConfig.EnabledSharedKills.Value;
+            var uri = new System.Uri($"{serverUrl}/ws?friendlies&role={role}&code={code}&name={ModConfig.PlayerName.Value}&enabledSharedExperience={enabledSharedExperience}&enabledSharedKills={enabledSharedKills}");
 
             await ws.ConnectAsync(uri, token);
             networkHandler.OnConnectedToMatchMaker();
@@ -265,9 +268,9 @@ namespace MegabonkTogether.Services
             udpClientService.CancelAnyNatIntroduction();
             Plugin.Instance.NetworkHandler.OnNetworkInterrupted("Host has disconnected");
 
-            _ = Task.Run(async () => //TODO: the task might be usesless now (Was preventing a race condition before)
+            // Runs on the next frame: GoToMainMenu touches Unity UI, which must happen on the main thread
+            MainThreadDispatcher.Enqueue(() =>
             {
-                await Task.Delay(100);
                 Plugin.Instance.NetworkHandler.ResetNetworking();
                 Plugin.GoToMainMenu();
             });
@@ -290,9 +293,16 @@ namespace MegabonkTogether.Services
 
                 if (ws != null && ws.State == WebSocketState.Open)
                 {
+                    // Bounded: the caller may block the main thread on this, so a dead connection must not hang the game
+                    using var closeTimeout = new CancellationTokenSource(CLOSE_TIMEOUT);
                     try
                     {
-                        await ws.CloseAsync(WebSocketCloseStatus.NormalClosure, "Starting P2P", CancellationToken.None);
+                        await ws.CloseAsync(WebSocketCloseStatus.NormalClosure, "Starting P2P", closeTimeout.Token);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        Plugin.Log.LogWarning($"WebSocket close handshake timed out after {CLOSE_TIMEOUT.TotalSeconds}s, aborting");
+                        ws.Abort();
                     }
                     catch (WebSocketException wsEx)
                     {

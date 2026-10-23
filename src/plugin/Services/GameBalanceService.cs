@@ -1,5 +1,6 @@
 ﻿using Assets.Scripts.Actors.Enemies;
 using Assets.Scripts.Managers;
+using System;
 using System.Linq;
 
 namespace MegabonkTogether.Services
@@ -8,6 +9,14 @@ namespace MegabonkTogether.Services
     {
         public float GetCreditsTimerMultiplier();
         public float GetEnemyHpMultiplier(EEnemyFlag enemyFlag);
+
+        /// <summary>
+        /// Damage dealt by enemies to players. Computed on every peer (each client computes the damage it takes),
+        /// so it only depends on the player count fixed at stage start
+        /// </summary>
+        public float GetEnemyDamageMultiplier();
+        public float GetEnemySpeedMultiplier();
+        public float GetEliteChanceMultiplier();
         public float GetFreeChestSpawnRateMultiplier();
         public int GetPickupXpValue();
         public void Initialize();
@@ -27,8 +36,13 @@ namespace MegabonkTogether.Services
 
     internal class GameBalanceService(IPlayerManagerService playerManagerService) : IGameBalanceService
     {
-        private const float hpScalingPerAdditionalPlayer = 0.1f;
+        private const float hpScalingPerAdditionalAlivePlayer = 0.2f; //Hp follows the alive players: enemies spawn weaker once someone is dead
+        private const float damageScalingPerAdditionalPlayer = 0.1f;
+        private const float eliteChanceScalingPerAdditionalPlayer = 0.15f;
+        private const float speedScalingPerAdditionalPlayer = 0.03f;
+        private int playersCountAtStageStart = 0; //Connected players when the stage started: damage, elites and speed don't drop when someone dies
         private int PlayersCount => playerManagerService.GetAllPlayersAlive().Count();
+        private int ConnectedPlayersCount => playersCountAtStageStart > 0 ? playersCountAtStageStart : playerManagerService.GetAllPlayers().Count();
         private static int StageIndex => MapController.runConfig?.mapData.stages.IndexOf(MapController.currentStage) ?? 0;
         private const float baseBossLampInitialChargeTimeSeconds = 3.0f;
 
@@ -83,7 +97,7 @@ namespace MegabonkTogether.Services
                 _ => 1f
             };
 
-            float playerScaling = 1f + (PlayersCount - 1) * hpScalingPerAdditionalPlayer;
+            float playerScaling = 1f + AdditionalPlayers(PlayersCount) * hpScalingPerAdditionalAlivePlayer;
 
             float stageMultiplier = StageIndex switch
             {
@@ -94,6 +108,26 @@ namespace MegabonkTogether.Services
             };
 
             return baseMultiplier * playerScaling * stageMultiplier;
+        }
+
+        public float GetEnemyDamageMultiplier()
+        {
+            return 1f + AdditionalPlayers(ConnectedPlayersCount) * damageScalingPerAdditionalPlayer;
+        }
+
+        public float GetEnemySpeedMultiplier()
+        {
+            return 1f + AdditionalPlayers(ConnectedPlayersCount) * speedScalingPerAdditionalPlayer;
+        }
+
+        public float GetEliteChanceMultiplier()
+        {
+            return 1f + AdditionalPlayers(ConnectedPlayersCount) * eliteChanceScalingPerAdditionalPlayer;
+        }
+
+        private static int AdditionalPlayers(int playersCount)
+        {
+            return Math.Max(0, playersCount - 1);
         }
 
         public float GetFreeChestSpawnRateMultiplier()
@@ -132,14 +166,17 @@ namespace MegabonkTogether.Services
 
         public void Initialize()
         {
+            playersCountAtStageStart = playerManagerService.GetAllPlayers().Count();
+
             var creditsMultiplier = GetCreditsTimerMultiplier();
             var enemyHpMultiplier = GetEnemyHpMultiplier(EEnemyFlag.None);
             var chestSpawnMultiplier = GetFreeChestSpawnRateMultiplier();
             var xpValue = GetPickupXpValue();
 
-            Plugin.Log.LogInfo($"[GameBalance] Initialized for {PlayersCount} players, Stage {StageIndex + 1}, Difficulty: {GetDifficultyLevelByPlayers()}");
+            Plugin.Log.LogInfo($"[GameBalance] Initialized for {PlayersCount} players ({playersCountAtStageStart} connected), Stage {StageIndex + 1}, Difficulty: {GetDifficultyLevelByPlayers()}");
             Plugin.Log.LogInfo($"[GameBalance] Credits Timer Multiplier (Disabled): {creditsMultiplier:F2}x");
             Plugin.Log.LogInfo($"[GameBalance] Basic Enemy HP Base Multiplier: {enemyHpMultiplier:F2}x");
+            Plugin.Log.LogInfo($"[GameBalance] Enemy Damage Multiplier: {GetEnemyDamageMultiplier():F2}x, Speed: {GetEnemySpeedMultiplier():F2}x, Elite Chance: {GetEliteChanceMultiplier():F2}x");
             Plugin.Log.LogInfo($"[GameBalance] Free Chest Spawn Rate Multiplier: {chestSpawnMultiplier:F2}x");
 
             if (Plugin.Instance.Mode.EnabledSharedExperience.HasValue && !Plugin.Instance.Mode.EnabledSharedExperience.Value)

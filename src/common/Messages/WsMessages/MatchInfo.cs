@@ -9,6 +9,7 @@ namespace MegabonkTogether.Common.Messages
         public IEnumerable<PeerInfo> Peers { get; set; } = Array.Empty<PeerInfo>();
         public uint Seed { get; set; }
         public bool EnabledSharedExperience { get; set; }
+        public bool EnabledSharedKills { get; set; }
     }
 
     [MemoryPackable]

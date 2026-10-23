@@ -2,6 +2,7 @@
 using Assets.Scripts.Actors.Enemies;
 using Assets.Scripts.Saves___Serialization.Progression.Stats;
 using HarmonyLib;
+using MegabonkTogether.Helpers;
 using MegabonkTogether.Services;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -30,6 +31,8 @@ namespace MegabonkTogether.Patches
 
             if (tracks.kills == 0)
             {
+                //Remote kill: the game's tracking (persistent stats) stays blocked, only the run stats get it when kills are shared
+                SharedKillsHelper.CountRemoteKill(enemy);
                 return false;
             }
 

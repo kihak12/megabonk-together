@@ -38,7 +38,7 @@ namespace MegabonkTogether.Patches.Inventories
         [HarmonyPatch(nameof(PlayerInventory.ChangeGold))]
         public static void ChangeGold_Postfix(PlayerInventory __instance, int amount)
         {
-            if (!synchronizationService.HasNetplaySessionStarted())
+            if (!synchronizationService.IsNetplaySessionActive()) //Also while teleporting to the next stage
             {
                 return;
             }
@@ -56,6 +56,12 @@ namespace MegabonkTogether.Patches.Inventories
             if (amount < 0)
             {
                 return;
+            }
+
+            var localInventory = GameManager.Instance?.player?.inventory;
+            if (localInventory == null || __instance.Pointer != localInventory.Pointer)
+            {
+                return; //Net players have their own inventory: only the local player's gains are shared
             }
 
             synchronizationService.OnChangeGold(amount);

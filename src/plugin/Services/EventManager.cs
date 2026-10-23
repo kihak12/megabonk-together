@@ -67,6 +67,7 @@ namespace MegabonkTogether.Services
         private static event Action<AddXp> AddXpEvents;
         private static event Action<CloseEncounter> CloseEncounterEvents;
         private static event Action<GoldChanged> GoldChangedEvents;
+        private static event Action<XpSync> XpSyncEvents;
 
         public static void OnSpawnedObject(SpawnedObject spawnedObject)
         {
@@ -809,6 +810,19 @@ namespace MegabonkTogether.Services
             MainThreadDispatcher.Enqueue(() =>
             {
                 GoldChangedEvents?.Invoke(goldChanged);
+            });
+        }
+
+        public static void SubscribeXpSyncEvents(Action<XpSync> action)
+        {
+            XpSyncEvents += action;
+        }
+
+        public static void OnXpSync(XpSync xpSync)
+        {
+            MainThreadDispatcher.Enqueue(() =>
+            {
+                XpSyncEvents?.Invoke(xpSync);
             });
         }
     }

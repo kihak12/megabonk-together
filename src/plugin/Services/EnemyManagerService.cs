@@ -49,6 +49,11 @@ namespace MegabonkTogether.Services
         public IEnumerable<(uint, uint)> ReTargetEnemies(uint oldTargetId, IEnumerable<uint> currentPlayersAliveExcludingOldOneId)
         {
             var retargetedEnemies = new List<(uint, uint)>();
+            if (!currentPlayersAliveExcludingOldOneId.Any())
+            {
+                return retargetedEnemies; //Nobody left to target (last player alive died or left)
+            }
+
             var oldTargetEnemies = spawnedEnemies.Values.Where(enemy =>
             {
                 var currentTargetid = DynamicData.For(enemy).Get<uint?>("targetId");

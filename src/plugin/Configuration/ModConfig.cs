@@ -16,6 +16,7 @@ namespace MegabonkTogether.Configuration
         public static ConfigEntry<string> PreviousVersion { get; private set; }
         public static ConfigEntry<bool> AllowSavesDuringNetplay { get; private set; }
         public static ConfigEntry<bool> EnabledSharedExperience { get; private set; }
+        public static ConfigEntry<bool> EnabledSharedKills { get; private set; }
 
         public static void Initialize(ConfigFile config)
         {
@@ -30,8 +31,8 @@ namespace MegabonkTogether.Configuration
             CheckForUpdates = config.Bind(
                 "Updates",
                 "CheckForUpdates",
-                true,
-                "Check for updates on startup . Recommend leaving this enabled"
+                false,
+                "Check for updates on startup. This is an unofficial build: enabling this would replace it with the official release when one comes out"
             );
             ServerUrl = config.Bind(
                 "Network",
@@ -68,6 +69,12 @@ namespace MegabonkTogether.Configuration
                 "EnabledSharedExperience",
                 false,
                 "Enable Host experience (Same XP and pause enabled). Disable for no pause and separate XP."
+            );
+            EnabledSharedKills = config.Bind(
+                "Gameplay",
+                "EnabledSharedKills",
+                false,
+                "Share the kill counter (HUD and end of run stats) across all players. Decided by the host for the whole lobby. Forces AllowSavesDuringNetplay off."
             );
         }
 

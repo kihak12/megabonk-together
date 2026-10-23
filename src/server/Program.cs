@@ -66,6 +66,7 @@ app.MapWhen(context => context.Request.Path.StartsWithSegments("/ws"), wsApp =>
             var query = context.Request.Query;
 
             var enabledSharedExperience = bool.Parse(query["enabledSharedExperience"].ToString());
+            bool.TryParse(query["enabledSharedKills"].ToString(), out var enabledSharedKills); // Optional: older clients don't send it
 
             if (query.ContainsKey("random"))
             {
@@ -73,6 +74,7 @@ app.MapWhen(context => context.Request.Path.StartsWithSegments("/ws"), wsApp =>
                     context.Connection.RemoteIpAddress?.ToString(),
                     context.Connection.RemotePort,
                     enabledSharedExperience,
+                    enabledSharedKills,
                     cts.Token);
             }
             else if (query.ContainsKey("friendlies"))
@@ -88,6 +90,7 @@ app.MapWhen(context => context.Request.Path.StartsWithSegments("/ws"), wsApp =>
                     code,
                     name,
                     enabledSharedExperience,
+                    enabledSharedKills,
                     cts.Token);
             }
             else

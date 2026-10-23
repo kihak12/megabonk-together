@@ -98,6 +98,12 @@ namespace MegabonkTogether.Services
 
         public void PrepareForNextLevel();
         public bool IsLoadingNextLevel();
+
+        /// <summary>
+        /// Started, or loading the next level. Shared state (xp, gold, pickups) keeps flowing while players teleport,
+        /// otherwise what is picked up during the transition is only applied locally and players drift apart
+        /// </summary>
+        public bool IsNetplaySessionActive();
         public bool OnStartingToChargingPylon(uint pylonNetplayId);
         public bool OnStoppingChargingPylon(uint pylonNetplayId);
         public void OnFinalBossOrbsSpawned(Orb orb);
@@ -126,9 +132,30 @@ namespace MegabonkTogether.Services
         public void OnSkinSelected(SkinData skin);
         public void OnRespawn(uint ownerId, Vector3 position);
         public bool IsSharedExperienceEnabled();
-        public void PlayerXpAddXp(int xp, int amount, float leftOverXp);
-        public void RewardFinished();
+
+        /// <summary>
+        /// Lobby option decided by the host: the kill counter is cumulated across players and saving is forced off
+        /// </summary>
+        public bool IsSharedKillsEnabled();
+        public void PlayerXpAddXp(int xp, int gainedXp, float leftOverXp);
+
+        /// <summary>
+        /// Notify that the local player is done with the current encounter(s) and waits for the others.
+        /// Returns true if everyone was already done and the encounter got closed right away
+        /// </summary>
+        public bool RewardFinished();
         public void OnChangeGold(int amount);
+
+        /// <summary>
+        /// Shared experience: send the local xp to the other players so everyone gets raised to the highest xp (pause menu button)
+        /// </summary>
+        public void RequestXpSync();
+
+        /// <summary>
+        /// Consume one reward that only the local player got (level ups given by an xp sync).
+        /// Nobody else is waiting for it, so the encounter must not block on the other players
+        /// </summary>
+        public bool ConsumeLocalOnlyEncounter();
     }
     internal class SynchronizationService : ISynchronizationService
     {
@@ -157,6 +184,11 @@ namespace MegabonkTogether.Services
         private readonly ConcurrentDictionary<uint, ICollection<uint>> lampsChargingPlayers = [];
         private readonly List<GameObject> specificDesertGraves = [];
         private InteractableCoffin currentCoffin = null;
+        private bool isWaitingForOthers = false; //Shared experience: local player is done with its encounter(s) and waits for the others
+        private int localOnlyEncounters = 0; //Shared experience: level up rewards given by an xp sync, which the other players don't have
+        private float lastXpSyncRequestTime = -XP_SYNC_REQUEST_COOLDOWN;
+        private const float XP_SYNC_REQUEST_COOLDOWN = 3f;
+        private const float XP_SYNC_STAGE_START_DELAY = 2f;
 
         private CancellationTokenSource cancellationTokenSource = new();
         private CancellationToken cancellationToken = default;
@@ -246,6 +278,9 @@ namespace MegabonkTogether.Services
             EventManager.SubscribeAddXpEvents(OnReceivedAddXp);
             EventManager.SubscribeCloseEncounterEvents(OnReceivedCloseEncounter);
             EventManager.SubscribeGoldChangedEvents(OnReceivedChangeGold);
+            EventManager.SubscribeXpSyncEvents(OnReceivedXpSync);
+
+            encounterService.TimedOut += OnEncounterWaitTimedOut;
 
             cancellationToken = cancellationTokenSource.Token;
             this.udpClientService = udpClientService;
@@ -297,6 +332,31 @@ namespace MegabonkTogether.Services
             enemyManagerService.ResetReviverSpawnCounts();
 
             Plugin.Instance.HasDungeonTimerStarted = false;
+
+            isWaitingForOthers = false;
+            encounterService.ClearClosedEncounters(); //A session left mid-encounter must not leak closed players (or a forced close) into the next one
+            localOnlyEncounters = 0;
+            lastXpSyncRequestTime = -XP_SYNC_REQUEST_COOLDOWN;
+
+            ResetGateFlags();
+        }
+
+        /// <summary>
+        /// Restore every netplay gate flag to its default so a flag left in the wrong state
+        /// (e.g. by an exception in a handler) never leaks into the next session
+        /// </summary>
+        private static void ResetGateFlags()
+        {
+            Plugin.CAN_SEND_MESSAGES = true;
+            Plugin.CAN_SPAWN_PICKUPS = false;
+            Plugin.CAN_SPAWN_CHESTS = false;
+            Plugin.CAN_ENEMY_EXPLODE = false;
+            Plugin.CAN_ENEMY_USE_SPECIAL_ATTACK = false;
+            Plugin.Instance.CAN_SPAWN_TORNADOES = false;
+            Plugin.Instance.CAN_START_STOP_STORMS = false;
+            Plugin.Instance.CAN_DAMAGE_ENEMIES = false;
+            Plugin.Instance.IS_MANUAL_INVINCIBLE = false;
+            Plugin.Instance.IS_NETPLAYER_ADDING_TOME = false;
         }
 
         public void OnSpawnedObject(GameObject obj)
@@ -565,6 +625,33 @@ namespace MegabonkTogether.Services
             gameBalanceService.Initialize();
 
             Plugin.Instance.PreventDeath();
+
+            if (IsSharedExperienceEnabled())
+            {
+                PauseMenuHelper.AddResyncXpButton(RequestXpSync);
+
+                if (IsServerMode() ?? false)
+                {
+                    CoroutineRunner.Instance.Run(StageStartXpSyncRoutine());
+                }
+            }
+        }
+
+        /// <summary>
+        /// Host, shared experience: re-align everyone's xp when a stage starts.
+        /// Nothing is in flight yet (no enemies), so an absolute sync can't double count a gain
+        /// </summary>
+        private IEnumerator StageStartXpSyncRoutine()
+        {
+            yield return new WaitForSecondsRealtime(XP_SYNC_STAGE_START_DELAY);
+
+            if (currentState != State.Started || !IsSharedExperienceEnabled())
+            {
+                yield break;
+            }
+
+            logger.LogInfo("[XpSync] Stage started, sending the host xp to the other players");
+            SendXpSync(false);
         }
 
         private void SendSpawnedObject(uint netplayId, GameObject obj)
@@ -1550,11 +1637,16 @@ namespace MegabonkTogether.Services
             playerManagerService.AddGetNetplayerPositionRequest(damaged.AttackerId);
             trackerService.SetCurrentPlayerId(damaged.AttackerId);
 
-            enemy.Damage(damageContainer);
-
-            trackerService.UnsetCurrentPlayerId();
-            playerManagerService.UnqueueNetplayerPositionRequest();
-            Plugin.Instance.CAN_DAMAGE_ENEMIES = false;
+            try
+            {
+                enemy.Damage(damageContainer);
+            }
+            finally
+            {
+                trackerService.UnsetCurrentPlayerId();
+                playerManagerService.UnqueueNetplayerPositionRequest();
+                Plugin.Instance.CAN_DAMAGE_ENEMIES = false;
+            }
         }
 
 
@@ -1602,6 +1694,7 @@ namespace MegabonkTogether.Services
             {
                 //don't spawn a ghost :/
                 enemiesDiedBeforeSpawn.Add(died.EnemyId);
+                SharedKillsHelper.CountRemoteKill(null); //The spawn will be dropped, so TrackStats never sees this kill
                 return;
             }
 
@@ -1616,10 +1709,15 @@ namespace MegabonkTogether.Services
             Plugin.CAN_SEND_MESSAGES = false;
             trackerService.SetCurrentPlayerId(died.DiedByOwnerId);
 
-            enemy.EnemyDied(damageContainer);
-
-            trackerService.UnsetCurrentPlayerId();
-            Plugin.CAN_SEND_MESSAGES = true;
+            try
+            {
+                enemy.EnemyDied(damageContainer);
+            }
+            finally
+            {
+                trackerService.UnsetCurrentPlayerId();
+                Plugin.CAN_SEND_MESSAGES = true;
+            }
 
             var isHost = IsServerMode() ?? false;
             if (!isHost)
@@ -1726,8 +1824,15 @@ namespace MegabonkTogether.Services
         private void OnReceivedSpawnedPickup(SpawnedPickup pickup)
         {
             Plugin.CAN_SPAWN_PICKUPS = true;
-            var spawnedPickup = PickupManager.Instance.SpawnPickup((EPickup)pickup.Pickup, pickup.Position.ToUnityVector3(), pickup.Value, false);
-            Plugin.CAN_SPAWN_PICKUPS = false;
+            Pickup spawnedPickup;
+            try
+            {
+                spawnedPickup = PickupManager.Instance.SpawnPickup((EPickup)pickup.Pickup, pickup.Position.ToUnityVector3(), pickup.Value, false);
+            }
+            finally
+            {
+                Plugin.CAN_SPAWN_PICKUPS = false;
+            }
 
             //if (spawnedPickup.ePickup == EPickup.Xp && !IsSharedExperienceEnabled())
             //{
@@ -1756,8 +1861,14 @@ namespace MegabonkTogether.Services
         private void OnReceivedSpawnedOrbPickup(SpawnedPickupOrb pickup)
         {
             Plugin.CAN_SPAWN_PICKUPS = true;
-            EffectManager.Instance.SpawnPickupOrb((EPickup)pickup.Pickup, pickup.Position.ToUnityVector3());
-            Plugin.CAN_SPAWN_PICKUPS = false;
+            try
+            {
+                EffectManager.Instance.SpawnPickupOrb((EPickup)pickup.Pickup, pickup.Position.ToUnityVector3());
+            }
+            finally
+            {
+                Plugin.CAN_SPAWN_PICKUPS = false;
+            }
         }
 
         public void OnPickupApplied(Pickup instance)
@@ -1804,8 +1915,14 @@ namespace MegabonkTogether.Services
             if (pickup.ePickup == EPickup.Time || pickup.ePickup == EPickup.Magnet) //Apply for all clients
             {
                 Plugin.CAN_SEND_MESSAGES = false;
-                pickup.ApplyPickup();
-                Plugin.CAN_SEND_MESSAGES = true;
+                try
+                {
+                    pickup.ApplyPickup();
+                }
+                finally
+                {
+                    Plugin.CAN_SEND_MESSAGES = true;
+                }
             }
             //else if (pickup.ePickup == EPickup.Xp && IsSharedExperienceEnabled()) //Apply xp pickup for all clients if shared xp enabled
             //{
@@ -1910,8 +2027,14 @@ namespace MegabonkTogether.Services
             dynPickup.Set("ownerId", player.PlayerId);
 
             Plugin.CAN_SEND_MESSAGES = false;
-            pickup.StartFollowingPlayer(target);
-            Plugin.CAN_SEND_MESSAGES = true;
+            try
+            {
+                pickup.StartFollowingPlayer(target);
+            }
+            finally
+            {
+                Plugin.CAN_SEND_MESSAGES = true;
+            }
         }
 
         public void OnWantToStartFollowingPickup(Pickup instance)
@@ -2006,8 +2129,14 @@ namespace MegabonkTogether.Services
         {
             chestManagerService.PushNextChestId(chest.ChestId);
             Plugin.CAN_SPAWN_CHESTS = true;
-            EffectManager.Instance.SpawnChest(EffectManager.Instance.openChestNormal, chest.Position.ToUnityVector3());
-            Plugin.CAN_SPAWN_CHESTS = false;
+            try
+            {
+                EffectManager.Instance.SpawnChest(EffectManager.Instance.openChestNormal, chest.Position.ToUnityVector3());
+            }
+            finally
+            {
+                Plugin.CAN_SPAWN_CHESTS = false;
+            }
         }
 
         public void OnChestOpened(OpenChest instance)
@@ -2114,10 +2243,16 @@ namespace MegabonkTogether.Services
 
                 Plugin.CAN_SEND_MESSAGES = false;
                 Plugin.Instance.SavePlayerInventoryActions();
-                player.Inventory.weaponInventory.AddWeapon(weaponData, upgradeModifiers);
-                player.RefreshConstantAttack(upgradeModifiers);
-                Plugin.Instance.RestorePlayerInventoryActions();
-                Plugin.CAN_SEND_MESSAGES = true;
+                try
+                {
+                    player.Inventory.weaponInventory.AddWeapon(weaponData, upgradeModifiers);
+                    player.RefreshConstantAttack(upgradeModifiers);
+                }
+                finally
+                {
+                    Plugin.Instance.RestorePlayerInventoryActions();
+                    Plugin.CAN_SEND_MESSAGES = true;
+                }
             }
         }
 
@@ -2184,11 +2319,16 @@ namespace MegabonkTogether.Services
 
                 var callbacks = TomeInventory.A_TomeUpgrade;
                 TomeInventory.A_TomeUpgrade = null;
-                player.Inventory.tomeInventory.AddTome(tomeData, upgradeModifiers, (ERarity)added.Rarity);
-                player.RefreshConstantAttack(upgradeModifiers);
-                TomeInventory.A_TomeUpgrade = callbacks;
-
-                Plugin.CAN_SEND_MESSAGES = true;
+                try
+                {
+                    player.Inventory.tomeInventory.AddTome(tomeData, upgradeModifiers, (ERarity)added.Rarity);
+                    player.RefreshConstantAttack(upgradeModifiers);
+                }
+                finally
+                {
+                    TomeInventory.A_TomeUpgrade = callbacks;
+                    Plugin.CAN_SEND_MESSAGES = true;
+                }
             }
         }
 
@@ -2400,9 +2540,15 @@ namespace MegabonkTogether.Services
                     if (portal != null)
                     {
                         Plugin.CAN_SEND_MESSAGES = false;
-                        portal.Interact();
-                        TransitionToState(GameEvent.PortalOpened);
-                        Plugin.CAN_SEND_MESSAGES = true;
+                        try
+                        {
+                            portal.Interact();
+                            TransitionToState(GameEvent.PortalOpened);
+                        }
+                        finally
+                        {
+                            Plugin.CAN_SEND_MESSAGES = true;
+                        }
                     }
                 }
 
@@ -2411,13 +2557,19 @@ namespace MegabonkTogether.Services
 
             if (used.IsFinalPortal)
             {
-                var finalPortal = Il2CppFindHelper.FindAllGameObjects().FirstOrDefault(go => go.GetComponent<InteractablePortalFinal>() != null).GetComponent<InteractablePortalFinal>(); //Find the componnt somehow instead of whole gameobject search
+                var finalPortal = Il2CppFindHelper.FindAllGameObjects().FirstOrDefault(go => go.GetComponent<InteractablePortalFinal>() != null)?.GetComponent<InteractablePortalFinal>(); //Find the componnt somehow instead of whole gameobject search
                 if (finalPortal != null)
                 {
                     Plugin.CAN_SEND_MESSAGES = false;
-                    finalPortal.Interact();
-                    TransitionToState(GameEvent.FinalPortalOpened);
-                    Plugin.CAN_SEND_MESSAGES = true;
+                    try
+                    {
+                        finalPortal.Interact();
+                        TransitionToState(GameEvent.FinalPortalOpened);
+                    }
+                    finally
+                    {
+                        Plugin.CAN_SEND_MESSAGES = true;
+                    }
                 }
                 else
                 {
@@ -2459,7 +2611,18 @@ namespace MegabonkTogether.Services
             }
 
             Plugin.CAN_SEND_MESSAGES = false;
+            try
+            {
+                ApplyReceivedInteractableUsed(used, interactableObj);
+            }
+            finally
+            {
+                Plugin.CAN_SEND_MESSAGES = true;
+            }
+        }
 
+        private void ApplyReceivedInteractableUsed(InteractableUsed used, GameObject interactableObj)
+        {
             switch (used.Action)
             {
                 case InteractableAction.Destroy:
@@ -2746,8 +2909,6 @@ namespace MegabonkTogether.Services
 
                     break;
             }
-
-            Plugin.CAN_SEND_MESSAGES = true;
         }
 
         public bool OnStartingToChargingShrine(uint shrineNetplayId)
@@ -2813,8 +2974,14 @@ namespace MegabonkTogether.Services
 
 
                 Plugin.CAN_SEND_MESSAGES = false;
-                shrineObj.OnTriggerEnter();
-                Plugin.CAN_SEND_MESSAGES = true;
+                try
+                {
+                    shrineObj.OnTriggerEnter();
+                }
+                finally
+                {
+                    Plugin.CAN_SEND_MESSAGES = true;
+                }
 
                 udpClientService.SendToAllClients(shrine, LiteNetLib.DeliveryMethod.ReliableOrdered);
             }
@@ -2837,8 +3004,14 @@ namespace MegabonkTogether.Services
                 }
 
                 Plugin.CAN_SEND_MESSAGES = false;
-                shrineObj.OnTriggerEnter();
-                Plugin.CAN_SEND_MESSAGES = true;
+                try
+                {
+                    shrineObj.OnTriggerEnter();
+                }
+                finally
+                {
+                    Plugin.CAN_SEND_MESSAGES = true;
+                }
 
             }
         }
@@ -2906,8 +3079,14 @@ namespace MegabonkTogether.Services
 
 
                 Plugin.CAN_SEND_MESSAGES = false;
-                shrineObj.OnTriggerExit();
-                Plugin.CAN_SEND_MESSAGES = true;
+                try
+                {
+                    shrineObj.OnTriggerExit();
+                }
+                finally
+                {
+                    Plugin.CAN_SEND_MESSAGES = true;
+                }
 
                 udpClientService.SendToAllClients(shrine, LiteNetLib.DeliveryMethod.ReliableOrdered);
             }
@@ -2929,8 +3108,14 @@ namespace MegabonkTogether.Services
                 }
 
                 Plugin.CAN_SEND_MESSAGES = false;
-                shrineObj.OnTriggerExit();
-                Plugin.CAN_SEND_MESSAGES = true;
+                try
+                {
+                    shrineObj.OnTriggerExit();
+                }
+                finally
+                {
+                    Plugin.CAN_SEND_MESSAGES = true;
+                }
 
             }
         }
@@ -2971,8 +3156,14 @@ namespace MegabonkTogether.Services
             }
 
             Plugin.CAN_ENEMY_EXPLODE = true;
-            EffectManager.Instance.ExploderEnemy(enemy);
-            Plugin.CAN_ENEMY_EXPLODE = false;
+            try
+            {
+                EffectManager.Instance.ExploderEnemy(enemy);
+            }
+            finally
+            {
+                Plugin.CAN_ENEMY_EXPLODE = false;
+            }
             enemyManagerService.RemoveEnemyById(exploder.EnemyId);
         }
 
@@ -3040,13 +3231,24 @@ namespace MegabonkTogether.Services
             DynamicData.For(enemy).Set("targetId", attack.TargetId); //Target might have changed
 
             Plugin.CAN_ENEMY_USE_SPECIAL_ATTACK = true;
-            enemy.specialAttackController.UseSpecialAttack(specialAttack);
-            Plugin.CAN_ENEMY_USE_SPECIAL_ATTACK = false;
+            try
+            {
+                enemy.specialAttackController.UseSpecialAttack(specialAttack);
+            }
+            finally
+            {
+                Plugin.CAN_ENEMY_USE_SPECIAL_ATTACK = false;
+            }
         }
 
         public bool IsLoadingNextLevel()
         {
             return currentState == State.LoadingNextLevel;
+        }
+
+        public bool IsNetplaySessionActive()
+        {
+            return currentState == State.Started || currentState == State.LoadingNextLevel;
         }
 
         public bool OnStartingToChargingPylon(uint pylonNetplayId)
@@ -3112,8 +3314,14 @@ namespace MegabonkTogether.Services
 
 
                 Plugin.CAN_SEND_MESSAGES = false;
-                pylonObj.OnTriggerEnter();
-                Plugin.CAN_SEND_MESSAGES = true;
+                try
+                {
+                    pylonObj.OnTriggerEnter();
+                }
+                finally
+                {
+                    Plugin.CAN_SEND_MESSAGES = true;
+                }
 
                 udpClientService.SendToAllClients(pylon, LiteNetLib.DeliveryMethod.ReliableOrdered);
             }
@@ -3136,8 +3344,14 @@ namespace MegabonkTogether.Services
                 }
 
                 Plugin.CAN_SEND_MESSAGES = false;
-                pylonObj.OnTriggerEnter();
-                Plugin.CAN_SEND_MESSAGES = true;
+                try
+                {
+                    pylonObj.OnTriggerEnter();
+                }
+                finally
+                {
+                    Plugin.CAN_SEND_MESSAGES = true;
+                }
 
             }
         }
@@ -3205,8 +3419,14 @@ namespace MegabonkTogether.Services
 
 
                 Plugin.CAN_SEND_MESSAGES = false;
-                lampObj.OnTriggerEnter();
-                Plugin.CAN_SEND_MESSAGES = true;
+                try
+                {
+                    lampObj.OnTriggerEnter();
+                }
+                finally
+                {
+                    Plugin.CAN_SEND_MESSAGES = true;
+                }
 
                 udpClientService.SendToAllClients(lamp, LiteNetLib.DeliveryMethod.ReliableOrdered);
             }
@@ -3229,8 +3449,14 @@ namespace MegabonkTogether.Services
                 }
 
                 Plugin.CAN_SEND_MESSAGES = false;
-                lampObj.OnTriggerEnter();
-                Plugin.CAN_SEND_MESSAGES = true;
+                try
+                {
+                    lampObj.OnTriggerEnter();
+                }
+                finally
+                {
+                    Plugin.CAN_SEND_MESSAGES = true;
+                }
 
             }
         }
@@ -3300,8 +3526,14 @@ namespace MegabonkTogether.Services
 
 
                 Plugin.CAN_SEND_MESSAGES = false;
-                pylonObj.OnTriggerExit();
-                Plugin.CAN_SEND_MESSAGES = true;
+                try
+                {
+                    pylonObj.OnTriggerExit();
+                }
+                finally
+                {
+                    Plugin.CAN_SEND_MESSAGES = true;
+                }
 
                 udpClientService.SendToAllClients(pylon, LiteNetLib.DeliveryMethod.ReliableOrdered);
             }
@@ -3323,8 +3555,14 @@ namespace MegabonkTogether.Services
                 }
 
                 Plugin.CAN_SEND_MESSAGES = false;
-                pylonObj.OnTriggerExit();
-                Plugin.CAN_SEND_MESSAGES = true;
+                try
+                {
+                    pylonObj.OnTriggerExit();
+                }
+                finally
+                {
+                    Plugin.CAN_SEND_MESSAGES = true;
+                }
             }
         }
 
@@ -3391,8 +3629,14 @@ namespace MegabonkTogether.Services
 
 
                 Plugin.CAN_SEND_MESSAGES = false;
-                lampObj.OnTriggerExit();
-                Plugin.CAN_SEND_MESSAGES = true;
+                try
+                {
+                    lampObj.OnTriggerExit();
+                }
+                finally
+                {
+                    Plugin.CAN_SEND_MESSAGES = true;
+                }
 
                 udpClientService.SendToAllClients(lamp, LiteNetLib.DeliveryMethod.ReliableOrdered);
             }
@@ -3414,8 +3658,14 @@ namespace MegabonkTogether.Services
                 }
 
                 Plugin.CAN_SEND_MESSAGES = false;
-                lampObj.OnTriggerExit();
-                Plugin.CAN_SEND_MESSAGES = true;
+                try
+                {
+                    lampObj.OnTriggerExit();
+                }
+                finally
+                {
+                    Plugin.CAN_SEND_MESSAGES = true;
+                }
             }
         }
 
@@ -3595,6 +3845,7 @@ namespace MegabonkTogether.Services
 
             var isHost = IsServerMode() ?? false;
             var playerId = localPlayer.ConnectionId;
+            logger.LogInfo($"[Death] Local player {playerId} died (host={isHost}), notifying others");
 
             IGameNetworkMessage diedMessage = new PlayerDied
             {
@@ -3626,6 +3877,7 @@ namespace MegabonkTogether.Services
         private void OnReceivedPlayerDied(PlayerDied died)
         {
             var isServer = IsServerMode() ?? false;
+            logger.LogInfo($"[Death] Received PlayerDied for {died.PlayerId} (host={isServer})");
             if (isServer)
             {
                 var diedPlayer = playerManagerService.GetPlayer(died.PlayerId);
@@ -3682,8 +3934,15 @@ namespace MegabonkTogether.Services
         {
             var desertGraves = EffectManager.Instance.desertGraves;
             Plugin.CAN_SEND_MESSAGES = false;
-            var desertGraveInstance = GameObject.Instantiate(desertGraves[0], position, Quaternion.Euler(-90, 0, 0));
-            Plugin.CAN_SEND_MESSAGES = true;
+            GameObject desertGraveInstance;
+            try
+            {
+                desertGraveInstance = GameObject.Instantiate(desertGraves[0], position, Quaternion.Euler(-90, 0, 0));
+            }
+            finally
+            {
+                Plugin.CAN_SEND_MESSAGES = true;
+            }
             var interactable = desertGraveInstance.GetComponent<InteractableDesertGrave>();
             var chargeFx = GameObject.Instantiate(interactable.chargeFx, desertGraveInstance.transform);
             var explodeFx = GameObject.Instantiate(interactable.explodeFx, desertGraveInstance.transform);
@@ -3719,6 +3978,7 @@ namespace MegabonkTogether.Services
 
         private void OnReceivedSpawnedReviver(SpawnedReviver reviver)
         {
+            logger.LogInfo($"[Death] Reviver {reviver.ReviverId} spawned for player {reviver.OwnerConnectionId}");
             var player = playerManagerService.GetNetPlayerByNetplayId(reviver.OwnerConnectionId);
             if (player != null)
             {
@@ -3907,14 +4167,20 @@ namespace MegabonkTogether.Services
             damageContainer.procCoefficient = lightningStrike.DamageProcCoefficient;
 
             Plugin.CAN_SEND_MESSAGES = false;
-            WeaponUtility.LightningStrike(
-                enemy,
-                lightningStrike.Bounces,
-                damageContainer,
-                lightningStrike.BounceRange,
-                lightningStrike.BounceProcCoefficient
-            );
-            Plugin.CAN_SEND_MESSAGES = true;
+            try
+            {
+                WeaponUtility.LightningStrike(
+                    enemy,
+                    lightningStrike.Bounces,
+                    damageContainer,
+                    lightningStrike.BounceRange,
+                    lightningStrike.BounceProcCoefficient
+                );
+            }
+            finally
+            {
+                Plugin.CAN_SEND_MESSAGES = true;
+            }
         }
 
         public void OnTornadoesSpawned(int amount)
@@ -3930,8 +4196,14 @@ namespace MegabonkTogether.Services
         private void OnReceivedTornadoesSpawned(TornadoesSpawned spawned)
         {
             Plugin.Instance.CAN_SPAWN_TORNADOES = true;
-            EffectManager.Instance.SpawnTornadoes(spawned.Amount);
-            Plugin.Instance.CAN_SPAWN_TORNADOES = false;
+            try
+            {
+                EffectManager.Instance.SpawnTornadoes(spawned.Amount);
+            }
+            finally
+            {
+                Plugin.Instance.CAN_SPAWN_TORNADOES = false;
+            }
         }
 
         public void OnStormStarted(DesertStorm desertStorm)
@@ -3947,10 +4219,16 @@ namespace MegabonkTogether.Services
         private void OnReceivedStormStarted(StormStarted started)
         {
             Plugin.Instance.CAN_START_STOP_STORMS = true;
-            var desertEvent = Plugin.Instance.GetMapEventsDesert();
-            desertEvent.StartStorm();
-            desertEvent.stormOverAtTime = started.StormOverAtTime;
-            Plugin.Instance.CAN_START_STOP_STORMS = false;
+            try
+            {
+                var desertEvent = Plugin.Instance.GetMapEventsDesert();
+                desertEvent.StartStorm();
+                desertEvent.stormOverAtTime = started.StormOverAtTime;
+            }
+            finally
+            {
+                Plugin.Instance.CAN_START_STOP_STORMS = false;
+            }
         }
 
         public void OnStormStopped()
@@ -3962,8 +4240,14 @@ namespace MegabonkTogether.Services
         private void OnReceivedStormStopped(StormStopped stopped)
         {
             Plugin.Instance.CAN_START_STOP_STORMS = true;
-            Plugin.Instance.GetMapEventsDesert().StopStorm();
-            Plugin.Instance.CAN_START_STOP_STORMS = false;
+            try
+            {
+                Plugin.Instance.GetMapEventsDesert().StopStorm();
+            }
+            finally
+            {
+                Plugin.Instance.CAN_START_STOP_STORMS = false;
+            }
         }
 
         public void OnTumbleWeedSpawned(InteractableTumbleWeed tumbleWeed)
@@ -4118,8 +4402,14 @@ namespace MegabonkTogether.Services
 
             var item = (EItem)added.EItem;
             Plugin.CAN_SEND_MESSAGES = false;
-            netPlayer.AddItem(item);
-            Plugin.CAN_SEND_MESSAGES = true;
+            try
+            {
+                netPlayer.AddItem(item);
+            }
+            finally
+            {
+                Plugin.CAN_SEND_MESSAGES = true;
+            }
         }
 
         public void OnItemRemoved(EItem item)
@@ -4152,8 +4442,14 @@ namespace MegabonkTogether.Services
 
             var item = (EItem)removed.EItem;
             Plugin.CAN_SEND_MESSAGES = false;
-            netPlayer.RemoveItem(item);
-            Plugin.CAN_SEND_MESSAGES = true;
+            try
+            {
+                netPlayer.RemoveItem(item);
+            }
+            finally
+            {
+                Plugin.CAN_SEND_MESSAGES = true;
+            }
         }
 
         public void OnWeaponToggled(WeaponInventory instance, EWeapon eWeapon, bool enable)
@@ -4191,10 +4487,14 @@ namespace MegabonkTogether.Services
                 return;
             }
             Plugin.CAN_SEND_MESSAGES = false;
-
-            netPlayer.ToggleWeapon((EWeapon)toggled.EWeapon, toggled.Enabled);
-
-            Plugin.CAN_SEND_MESSAGES = true;
+            try
+            {
+                netPlayer.ToggleWeapon((EWeapon)toggled.EWeapon, toggled.Enabled);
+            }
+            finally
+            {
+                Plugin.CAN_SEND_MESSAGES = true;
+            }
         }
 
         public void OnSpawnedObjectInCrypt(GameObject obj)
@@ -4284,8 +4584,14 @@ namespace MegabonkTogether.Services
             var hatData = DataManager.Instance.GetHat((EHat)changed.EHat);
 
             Plugin.CAN_SEND_MESSAGES = false;
-            netPlayer.SetHat(hatData);
-            Plugin.CAN_SEND_MESSAGES = true;
+            try
+            {
+                netPlayer.SetHat(hatData);
+            }
+            finally
+            {
+                Plugin.CAN_SEND_MESSAGES = true;
+            }
         }
 
         public void OnSkinSelected(SkinData skinData)
@@ -4301,6 +4607,7 @@ namespace MegabonkTogether.Services
         public void OnRespawn(uint ownerId, Vector3 position)
         {
             var netplayer = playerManagerService.GetNetPlayerByNetplayId(ownerId);
+            logger.LogInfo($"[Death] Reviving player {ownerId} ({(netplayer != null ? "remote" : "local")}), sending PlayerRespawned");
             if (netplayer != null)
             {
                 netplayer.Respawn(position);
@@ -4332,6 +4639,7 @@ namespace MegabonkTogether.Services
         private void OnReceivedPlayerRespawned(PlayerRespawned respawned)
         {
             var netplayer = playerManagerService.GetNetPlayerByNetplayId(respawned.OwnerId);
+            logger.LogInfo($"[Death] Received PlayerRespawned for {respawned.OwnerId} ({(netplayer != null ? "remote" : "local")})");
             if (netplayer != null)
             {
                 netplayer.Respawn(Quantizer.Dequantize(respawned.Position));
@@ -4362,12 +4670,28 @@ namespace MegabonkTogether.Services
             return false;
         }
 
-        public void PlayerXpAddXp(int xp, int amount, float leftOverXp)
+        public bool IsSharedKillsEnabled()
+        {
+            var mode = Plugin.Instance.Mode;
+            if (mode.EnabledSharedKills.HasValue)
+            {
+                return mode.EnabledSharedKills.Value;
+            }
+
+            //Friendlies host: no MatchInfo until the first client joins, its own config is the lobby value.
+            //The mode check matters: Role defaults to Host and random matchmaking never sets it
+            return mode.Mode == NetworkModeType.Friendlies && mode.Role == Role.Host && Configuration.ModConfig.EnabledSharedKills.Value;
+        }
+
+        /// <summary>
+        /// Xp is still the total (for players on another build), Amount is the xp actually gained, which receivers add
+        /// </summary>
+        public void PlayerXpAddXp(int xp, int gainedXp, float leftOverXp)
         {
             IGameNetworkMessage message = new AddXp
             {
                 Xp = xp,
-                Amount = amount,
+                Amount = gainedXp,
                 LeftOverXp = leftOverXp,
                 OwnerId = playerManagerService.GetLocalPlayer().ConnectionId,
             };
@@ -4386,16 +4710,168 @@ namespace MegabonkTogether.Services
 
         private void OnReceivedAddXp(AddXp xp)
         {
+            if (xp.Amount <= 0)
+            {
+                return;
+            }
+
+            var playerXp = GameManager.Instance?.player?.inventory?.playerXp;
+            if (playerXp == null)
+            {
+                logger.LogWarning($"[Xp] No local player to apply {xp.Amount} xp from {xp.OwnerId}, this player will be behind until the next xp sync");
+                return;
+            }
+
             Plugin.CAN_SEND_MESSAGES = false;
-            var playerXp = GameManager.Instance.player.inventory.playerXp;
-            playerXp.xp = xp.Xp;
-            playerXp.leftOverXp = xp.LeftOverXp;
-            playerXp.AddXp(0);
-            Plugin.CAN_SEND_MESSAGES = true;
+            try
+            {
+                //Add the gain instead of copying the sender's total: copying lost the xp of players gaining some at the same time
+                playerXp.xp += xp.Amount;
+                playerXp.AddXp(0); //Let the game check for level up
+            }
+            finally
+            {
+                Plugin.CAN_SEND_MESSAGES = true;
+            }
         }
 
-        public void RewardFinished()
+        public void RequestXpSync()
         {
+            if (!HasNetplaySessionStarted() || !IsSharedExperienceEnabled())
+            {
+                return;
+            }
+
+            if (Time.unscaledTime - lastXpSyncRequestTime < XP_SYNC_REQUEST_COOLDOWN)
+            {
+                return;
+            }
+            lastXpSyncRequestTime = Time.unscaledTime;
+
+            if (!SendXpSync(false))
+            {
+                return;
+            }
+
+            Plugin.StartNotification(("MegabonkTogether", "XpSync"), ("MegabonkTogether", "XpSyncRequestedDesc"), []);
+        }
+
+        /// <summary>
+        /// Send the local absolute xp state. Receivers raise themselves to it, or answer with theirs when higher
+        /// </summary>
+        private bool SendXpSync(bool isReply)
+        {
+            var playerXp = GameManager.Instance?.player?.inventory?.playerXp;
+            if (playerXp == null)
+            {
+                return false;
+            }
+
+            IGameNetworkMessage message = new XpSync
+            {
+                OwnerId = playerManagerService.GetLocalPlayer().ConnectionId,
+                Xp = playerXp.xp,
+                Level = playerXp.level,
+                LeftOverXp = playerXp.leftOverXp,
+                IsReply = isReply,
+            };
+
+            logger.LogInfo($"[XpSync] Sending xp={playerXp.xp} level={playerXp.level} reply={isReply}");
+
+            var isHost = IsServerMode() ?? false;
+            if (isHost)
+            {
+                udpClientService.SendToAllClients(message, LiteNetLib.DeliveryMethod.ReliableOrdered);
+            }
+            else
+            {
+                udpClientService.SendToHost(message, LiteNetLib.DeliveryMethod.ReliableOrdered);
+            }
+
+            return true;
+        }
+
+        private void OnReceivedXpSync(XpSync sync)
+        {
+            if (!IsSharedExperienceEnabled())
+            {
+                return;
+            }
+
+            var localPlayer = playerManagerService.GetLocalPlayer();
+            if (localPlayer == null || sync.OwnerId == localPlayer.ConnectionId)
+            {
+                return;
+            }
+
+            var playerXp = GameManager.Instance?.player?.inventory?.playerXp;
+            if (playerXp == null)
+            {
+                logger.LogWarning($"[XpSync] No local player to apply the xp sync from {sync.OwnerId}");
+                return;
+            }
+
+            if (sync.Xp < playerXp.xp)
+            {
+                logger.LogInfo($"[XpSync] Player {sync.OwnerId} has less xp ({sync.Xp} < {playerXp.xp})");
+                if (!sync.IsReply)
+                {
+                    SendXpSync(true); //Raise the requester (and everyone else) to our xp
+                }
+                return;
+            }
+
+            if (sync.Xp == playerXp.xp)
+            {
+                logger.LogInfo($"[XpSync] Already in sync with player {sync.OwnerId} (xp={playerXp.xp})");
+                return;
+            }
+
+            var encounterWindows = UiManager.Instance?.encounterWindows;
+            var previousLevel = playerXp.level;
+            var previousQueued = encounterWindows?.rewardQueue?.Count ?? 0;
+            var previousInProgress = encounterWindows?.encounterInProgress ?? false;
+
+            Plugin.CAN_SEND_MESSAGES = false;
+            try
+            {
+                playerXp.xp = sync.Xp;
+                playerXp.leftOverXp = sync.LeftOverXp;
+                playerXp.AddXp(0); //Let the game raise the level and pop the level up rewards this player missed
+            }
+            finally
+            {
+                Plugin.CAN_SEND_MESSAGES = true;
+            }
+
+            //The rewards popped by this sync are ours only: the other players must not be waited for when closing them
+            var queuedNow = encounterWindows?.rewardQueue?.Count ?? 0;
+            var inProgressNow = encounterWindows?.encounterInProgress ?? false;
+            var poppedRewards = Math.Max(0, queuedNow - previousQueued) + (inProgressNow && !previousInProgress ? 1 : 0);
+            localOnlyEncounters += poppedRewards;
+
+            logger.LogInfo($"[XpSync] Raised to xp={playerXp.xp} level={playerXp.level} (was level {previousLevel}) from player {sync.OwnerId}, {poppedRewards} local only reward(s)");
+
+            var senderName = playerManagerService.GetPlayer(sync.OwnerId)?.Name ?? sync.OwnerId.ToString();
+            Plugin.StartNotification(("MegabonkTogether", "XpSync"), ("MegabonkTogether", "XpSyncedDesc"), [senderName, playerXp.level.ToString()]);
+        }
+
+        public bool ConsumeLocalOnlyEncounter()
+        {
+            if (localOnlyEncounters <= 0)
+            {
+                return false;
+            }
+
+            localOnlyEncounters--;
+            return true;
+        }
+
+        public bool RewardFinished()
+        {
+            isWaitingForOthers = true;
+            encounterService.StartTimeout();
+
             IGameNetworkMessage message = new EncounterClosed
             {
                 OwnerId = playerManagerService.GetLocalPlayer().ConnectionId,
@@ -4414,12 +4890,63 @@ namespace MegabonkTogether.Services
 
                     udpClientService.SendToAllClients(closeMessage, LiteNetLib.DeliveryMethod.ReliableOrdered);
                     OnCloseEncounter();
+                    return true;
                 }
             }
             else
             {
                 udpClientService.SendToHost(message, LiteNetLib.DeliveryMethod.ReliableOrdered);
             }
+
+            return false;
+        }
+
+        /// <summary>
+        /// Waited too long for the other players: resume locally instead of staying paused forever.
+        /// Never close a reward the local player is still choosing
+        /// </summary>
+        private void OnEncounterWaitTimedOut()
+        {
+            try
+            {
+                if (!HasNetplaySessionStarted() || !IsSharedExperienceEnabled())
+                {
+                    encounterService.ClearClosedEncounters();
+                    return;
+                }
+
+                if (isWaitingForOthers && !IsChoosingReward())
+                {
+                    logger.LogWarning("[Encounter] Waited too long for other player(s) choices, resuming");
+                    encounterService.Close();
+                    OnCloseEncounter();
+                    ScreenTextHelper.Show("Other player(s) are taking too long, resuming...", new Vector2(0, -350));
+                    return;
+                }
+
+                //Host only: drop the players that already resumed on their own timeout, so they don't count as done for the next encounter
+                logger.LogWarning("[Encounter] Other player(s) waited too long, dropping their pending closes");
+                encounterService.ClearClosedEncounters();
+            }
+            catch (Exception ex)
+            {
+                logger.LogError($"[Encounter] Error while handling the wait timeout: {ex}");
+            }
+        }
+
+        /// <summary>
+        /// An encounter window is open and visible (the window is hidden while waiting for the others)
+        /// </summary>
+        private static bool IsChoosingReward()
+        {
+            var encounterWindows = UiManager.Instance?.encounterWindows;
+            if (encounterWindows == null || !encounterWindows.encounterInProgress)
+            {
+                return false;
+            }
+
+            var window = encounterWindows.activeEncounterWindow;
+            return window != null && window.gameObject.activeSelf;
         }
 
         private void OnReceivedCloseEncounter(CloseEncounter close)
@@ -4430,6 +4957,8 @@ namespace MegabonkTogether.Services
 
         private void OnCloseEncounter()
         {
+            isWaitingForOthers = false;
+
             if (UiManager.Instance.encounterWindows.encounterInProgress)
             {
                 UiManager.Instance.encounterWindows.RewardFinished();
@@ -4464,8 +4993,14 @@ namespace MegabonkTogether.Services
         private void OnReceivedChangeGold(GoldChanged changed)
         {
             Plugin.CAN_SEND_MESSAGES = false;
-            GameManager.Instance.player.inventory.ChangeGold(changed.Amount);
-            Plugin.CAN_SEND_MESSAGES = true;
+            try
+            {
+                GameManager.Instance.player.inventory.ChangeGold(changed.Amount);
+            }
+            finally
+            {
+                Plugin.CAN_SEND_MESSAGES = true;
+            }
         }
     }
 }

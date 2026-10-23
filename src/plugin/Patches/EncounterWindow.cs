@@ -6,6 +6,7 @@ using HarmonyLib;
 using MegabonkTogether.Helpers;
 using MegabonkTogether.Services;
 using Microsoft.Extensions.DependencyInjection;
+using System.Collections.Generic;
 using UnityEngine;
 
 namespace MegabonkTogether.Patches
@@ -15,6 +16,7 @@ namespace MegabonkTogether.Patches
     {
         private static readonly ISynchronizationService synchronizationService = Plugin.Services.GetService<ISynchronizationService>();
         private static readonly IEncounterService encounterService = Plugin.Services.GetService<IEncounterService>();
+        private static readonly List<UIParticleRenderer> hiddenParticles = []; //Hidden while waiting, shown again once the encounter is closed
 
         /// <summary>
         /// When changing level, the game will try to pop reward from previous stage missed
@@ -38,11 +40,13 @@ namespace MegabonkTogether.Patches
 
             if (GameManager.Instance.player.IsDead())
             {
-                if (synchronizationService.IsSharedExperienceEnabled())
+                if (synchronizationService.IsSharedExperienceEnabled() && !synchronizationService.ConsumeLocalOnlyEncounter())
                 {
                     MyTime.Pause();
-                    ScreenTextHelper.Show("Waiting for other player(s) choices...", new Vector2(0, -350));
-                    synchronizationService.RewardFinished();
+                    if (!synchronizationService.RewardFinished())
+                    {
+                        ScreenTextHelper.Show("Waiting for other player(s) choices...", new Vector2(0, -350));
+                    }
                 }
                 return false;
             }
@@ -75,11 +79,13 @@ namespace MegabonkTogether.Patches
 
             if (GameManager.Instance.player.IsDead())
             {
-                if (synchronizationService.IsSharedExperienceEnabled())
+                if (synchronizationService.IsSharedExperienceEnabled() && !synchronizationService.ConsumeLocalOnlyEncounter())
                 {
                     MyTime.Pause();
-                    synchronizationService.RewardFinished();
-                    ScreenTextHelper.Show("Waiting for other player(s) choices...", new Vector2(0, -350));
+                    if (!synchronizationService.RewardFinished())
+                    {
+                        ScreenTextHelper.Show("Waiting for other player(s) choices...", new Vector2(0, -350));
+                    }
                 }
                 return false;
             }
@@ -157,32 +163,60 @@ namespace MegabonkTogether.Patches
                 return true;
             }
 
+            //Checked before the queue: when the encounter is released while more rewards are queued,
+            //the state must still be cleared so the next queued reward waits for everyone again
+            if (encounterService.IsClosable())
+            {
+                ScreenTextHelper.Clear();
+                encounterService.ClearClosedEncounters();
+                RestoreHiddenParticles();
+                return true;
+            }
+
+            if (synchronizationService.ConsumeLocalOnlyEncounter())
+            {
+                return true; //Level up given by an xp sync: only this player has it, nobody to wait for
+            }
+
             var currentQueue = __instance.rewardQueue;
             if (currentQueue.Count > 0) //Keep popping reward until queue is empty
             {
                 return true;
             }
 
-            if (encounterService.IsClosable())
+            if (synchronizationService.RewardFinished())
             {
-                ScreenTextHelper.Clear();
-                encounterService.ClearClosedEncounters();
-                return true;
+                return false; //Everyone was already done: the encounter was just closed
             }
-
-            synchronizationService.RewardFinished();
 
             var ui = UiManager.Instance;
             ui.encounterWindows?.activeEncounterWindow?.gameObject.SetActive(false);
 
             foreach (var particles in Il2CppFindHelper.RuntimeGetComponentsInChildren<UIParticleRenderer>(ui))
             {
-                particles.enabled = false;
+                if (particles.enabled)
+                {
+                    particles.enabled = false;
+                    hiddenParticles.Add(particles);
+                }
             }
 
             ScreenTextHelper.Show("Waiting for other player(s) choices...", new Vector2(0, -350));
 
             return false;
+        }
+
+        private static void RestoreHiddenParticles()
+        {
+            foreach (var particles in hiddenParticles)
+            {
+                if (particles != null)
+                {
+                    particles.enabled = true;
+                }
+            }
+
+            hiddenParticles.Clear();
         }
     }
 }

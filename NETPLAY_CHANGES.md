@@ -36,6 +36,11 @@ You get i-frames when leveling up/getting a reward/openning a chest. This is to 
 The game naturally save progression and update your achievement. The game is not really meant to be played online so all of the save/steam interaction is prohibited when playing a netplay game.
 Same thing with uploading your score to the leaderbord, you would get banned anyway , so let's not do that 😅
 
+### Shared Kills (netplay option)
+
+By default every player only counts their own kills. With the **Shared Kills** option (Netplay options menu, decided by the host for the whole lobby), the kill counter in the HUD and the kills / elite kills / boss kills shown at the end of the run are cumulated across all players, so everyone sees the same team total.
+Because those counters are not yours alone anymore, saving progression is forced off for everyone in the lobby while the option is on, whatever the "Allow Saving progression" setting says. Your persistent stats and achievements are never touched by the other players' kills.
+
 ## Custom game balance
 
 The mod feature some game code to try to re balance the game as more player join a session.
@@ -50,3 +55,7 @@ This is **CERTAINLY** not perfect and probably unbalanced right now and will nee
 - Boss lamp charge: In the graveyard, the final boss is naturally weaker the more player with have as they can quicly charge lamp on their own. To counterbalance that, there is some additionnal time required to charge a lamp. The initial charge time when playing solo is 3, its doubled for example at 2 players and quadrupled at six players.
 
 - Max spawnable enemies: 400 and under on a final swarm (keeping the original cap) ,500 up to 4 player and 600 for 5-6 players (untested ,you have been warned)
+
+- Enemy HP: +20% per additional **alive** player (enemies spawn weaker once someone is dead), on top of a stage multiplier (x1.1 on stage 2, x1.2 on stage 3) and a bonus for bosses, elites, minibosses and challenge enemies
+
+- Enemy damage: +10% per additional player. Enemy speed: +3% per additional player. Elite chance: +15% per additional player. These three use the number of players connected when the stage started, so they don't drop when a teammate dies

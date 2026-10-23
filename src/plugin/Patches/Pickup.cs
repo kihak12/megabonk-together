@@ -22,7 +22,8 @@ namespace MegabonkTogether.Patches
         [HarmonyPatch(nameof(Pickup.ApplyPickup))]
         public static bool ApplyPickup_Prefix(Pickup __instance, ref bool? __state)
         {
-            if (!synchronizationService.HasNetplaySessionStarted())
+            //Also while teleporting to the next stage: a pickup owned by another player must never be applied locally
+            if (!synchronizationService.IsNetplaySessionActive())
             {
                 return true;
             }
@@ -60,7 +61,7 @@ namespace MegabonkTogether.Patches
         [HarmonyPatch(nameof(Pickup.ApplyPickup))]
         public static void ApplyPickup_Postfix(Pickup __instance, bool? __state)
         {
-            if (!synchronizationService.HasNetplaySessionStarted())
+            if (!synchronizationService.IsNetplaySessionActive())
             {
                 return;
             }
@@ -84,6 +85,13 @@ namespace MegabonkTogether.Patches
                 return;
             }
 
+            if (synchronizationService.IsLoadingNextLevel())
+            {
+                //The pickup manager is already reset for the next level: the gain itself is shared (xp / gold patches), nothing else to notify
+                dynPickup.Data.Clear();
+                return;
+            }
+
             synchronizationService.OnPickupApplied(__instance);
         }
 
@@ -96,7 +104,7 @@ namespace MegabonkTogether.Patches
         [HarmonyPatch(nameof(Pickup.StartFollowingPlayer))]
         public static bool StartFollowingPlayer_Prefix(Pickup __instance, ref Transform target)
         {
-            if (!synchronizationService.HasNetplaySessionStarted())
+            if (!synchronizationService.IsNetplaySessionActive())
             {
                 return true;
             }
@@ -116,6 +124,13 @@ namespace MegabonkTogether.Patches
             if (ownerId.HasValue)
             {
                 return true;
+            }
+
+            if (synchronizationService.IsLoadingNextLevel())
+            {
+                //Leaving the stage: an owner can't be granted anymore (the host doesn't poll while loading), so unowned pickups are left behind
+                //instead of being grabbed by every player locally
+                return false;
             }
 
             var hasSent = dynInstance.Get<bool?>("hasSentAlready");

@@ -5,6 +5,7 @@ using MegabonkTogether.Common.Models;
 using MegabonkTogether.Configuration;
 using MegabonkTogether.Helpers;
 using MegabonkTogether.Patches.Enemies;
+using MegabonkTogether.Scripts;
 using MegabonkTogether.Scripts.Button;
 using MegabonkTogether.Services;
 using Microsoft.Extensions.DependencyInjection;
@@ -59,6 +60,8 @@ namespace MegabonkTogether.Patches
                     CoroutineRunner.Instance.Stop(SpawnPlayerPortalPatches.WaitForLobbyCoroutine);
                 }
 
+                if (!ModConfig.CheckForUpdates.Value) return;
+
                 if (autoUpdaterService.IsCustomBuild() && hasShownUpdateModal) return;
 
                 Task.Run(async () =>
@@ -67,18 +70,22 @@ namespace MegabonkTogether.Patches
 
                     if (autoUpdaterService.IsAnUpdateAvailable())
                     {
-                        Plugin.ShowUpdateAvailableModal();
-
-                        if (autoUpdaterService.IsCustomBuild())
+                        // Back to the main thread: creating the modal and touching the button are Unity calls
+                        MainThreadDispatcher.Enqueue(() =>
                         {
-                            hasShownUpdateModal = true;
-                        }
+                            Plugin.ShowUpdateAvailableModal();
 
-                        if (Plugin.Instance.PlayTogetherButton == null)
-                        {
-                            return;
-                        }
-                        Plugin.Instance.PlayTogetherButton.enabled = false;
+                            if (autoUpdaterService.IsCustomBuild())
+                            {
+                                hasShownUpdateModal = true;
+                            }
+
+                            if (Plugin.Instance.PlayTogetherButton == null)
+                            {
+                                return;
+                            }
+                            Plugin.Instance.PlayTogetherButton.enabled = false;
+                        });
                     }
                 });
             }
@@ -229,6 +236,16 @@ namespace MegabonkTogether.Patches
 
                 text.text += $"\nShared Experience: {sharedExpStatus}";
             }
+
+            var sharedKillsValue = Plugin.Instance.Mode.Role == Role.Host ? ModConfig.EnabledSharedKills.Value : Plugin.Instance.Mode.EnabledSharedKills;
+            if (sharedKillsValue.HasValue)
+            {
+                var sharedKillsStatus = sharedKillsValue.Value
+                ? "<color=green>ON</color>"
+                : "<color=red>OFF</color>";
+
+                text.text += $"\nShared Kills: {sharedKillsStatus}";
+            }
             text.enableWordWrapping = false;
             text.alignment = TextAlignmentOptions.TopLeft;
             text.fontSize = 36;
@@ -366,10 +383,24 @@ namespace MegabonkTogether.Patches
 
         private static void DestroyReadyStatusDisplay()
         {
-            if (readyStatusDisplay)
+            var display = readyStatusDisplay;
+            readyStatusDisplay = null; //Cleared first: a display already destroyed with its scene must not be retried every frame
+
+            if (display == null)
             {
-                GameObject.Destroy(readyStatusDisplay);
-                readyStatusDisplay = null;
+                return;
+            }
+
+            try
+            {
+                if (display)
+                {
+                    GameObject.Destroy(display);
+                }
+            }
+            catch (System.Exception ex)
+            {
+                Plugin.Log.LogDebug($"Ready status display was already gone: {ex.Message}");
             }
         }
     }

@@ -7,33 +7,6 @@ using UnityEngine;
 
 namespace MegabonkTogether.Patches
 {
-    [HarmonyPatch(typeof(ChestOpening))]
-    internal static class ChestOpeningPatches
-    {
-        private static readonly Services.ISynchronizationService synchronizationService = Plugin.Services.GetService<Services.ISynchronizationService>();
-
-        /// <summary>
-        /// Skip the opening animation when in a netplay session and not in shared experience
-        /// </summary>
-        [HarmonyPostfix]
-        [HarmonyPatch(nameof(ChestOpening.OpenChest))]
-        public static void OpenChest_Postfix(ChestOpening __instance)
-        {
-            if (!synchronizationService.HasNetplaySessionStarted())
-            {
-                return;
-            }
-
-            if (synchronizationService.IsSharedExperienceEnabled())
-            {
-                return;
-            }
-
-            __instance.skipped = true;
-        }
-    }
-
-
     //TODO: Refacto with LevelUpScreenPatch
     [HarmonyPatch(typeof(ChestWindowUi))]
     internal static class ChestWindowUiPatches
@@ -41,7 +14,10 @@ namespace MegabonkTogether.Patches
         private static readonly Services.ISynchronizationService synchronizationService = Plugin.Services.GetService<Services.ISynchronizationService>();
         public static Coroutine CurrentRoutine;
         private static TMPro.TextMeshProUGUI infoText;
-        private static MyButton openButton;
+        private static bool isOpeningFinished = false;
+
+        private const float INVULNERABILITY_AFTER_REVEAL = 10f; //Time to pick the item while the world keeps running (no pause in netplay)
+        private const float MAX_OPENING_WAIT = 10f; //Before the reveal (clicking Open + animation): never stay invulnerable forever if the item is never revealed
 
         /// <summary>
         /// Diagnostic for issue #93 (soft lock when opening chest)
@@ -63,8 +39,9 @@ namespace MegabonkTogether.Patches
         }
 
         /// <summary>
-        /// Didn't find a proper way to hide the open button ¯\_(ツ)_/¯
-        /// Also let the original method run if shared experience is enabled
+        /// The window and its opening animation stay as in the original game (the player clicks Open),
+        /// so the player is made invulnerable as soon as the window shows: the world is never paused in netplay.
+        /// Let the original flow run if shared experience is enabled
         /// </summary>
         [HarmonyPostfix]
         [HarmonyPatch(nameof(ChestWindowUi.Open))]
@@ -80,19 +57,20 @@ namespace MegabonkTogether.Patches
                 return;
             }
 
-            if (openButton == null)
+            if (!GameManager.Instance.player.playerInput.CanInput())
             {
-                openButton = __instance.b_open;
+                Plugin.Log.LogInfo("Player cannot input, skipping invulnerability while opening chest.");
+                return;
             }
 
-            __instance.OpenButton();
-            __instance.b_open = null;
+            isOpeningFinished = false;
+            CoroutineRunner.Instance.Stop(CurrentRoutine);
+            CurrentRoutine = CoroutineRunner.Instance.Run(InvulnerableWhileChestOpen(__instance));
         }
 
         /// <summary>
-        /// Add a 5 seconds of invulnerability and a warning after opening a chest in netplay on shared experience only
+        /// The item is revealed: start the invulnerability countdown
         /// </summary>
-        /// <param name="__instance"></param>
         [HarmonyPostfix]
         [HarmonyPatch(nameof(ChestWindowUi.OpeningFinished))]
         public static void OpeningFinished_Postfix(ChestWindowUi __instance)
@@ -107,20 +85,13 @@ namespace MegabonkTogether.Patches
                 return;
             }
 
-            if (!GameManager.Instance.player.playerInput.CanInput())
-            {
-                Plugin.Log.LogInfo("Player cannot input, skipping invulnerability after chest opening.");
-                return;
-            }
-
             MyTime.Unpause();
 
-            CoroutineRunner.Instance.Stop(CurrentRoutine);
-            CurrentRoutine = CoroutineRunner.Instance.Run(Wait5SecBeforeCanTakeDamageAgain(__instance));
+            isOpeningFinished = true;
         }
 
         /// <summary>
-        /// Remove the invulnerability after closing the chest window on netplay
+        /// Remove the invulnerability as soon as the chest window is closed on netplay
         /// </summary>
         [HarmonyPostfix]
         [HarmonyPatch(nameof(ChestWindowUi.OnClose))]
@@ -131,70 +102,30 @@ namespace MegabonkTogether.Patches
                 return;
             }
 
-            if (CurrentRoutine == null)
+            if (synchronizationService.IsSharedExperienceEnabled())
             {
-                Plugin.Log.LogDebug("No active invulnerability routine, skipping.");
                 return;
             }
 
-            __instance.b_open = openButton;
-
             CoroutineRunner.Instance.Stop(CurrentRoutine);
-            CurrentRoutine = CoroutineRunner.Instance.Run(CancelWaitForVulnerabilityAfter1sec());
-        }
+            CurrentRoutine = null;
+            isOpeningFinished = false;
 
-        private static IEnumerator CancelWaitForVulnerabilityAfter1sec()
-        {
-            if (infoText == null)
+            if (Plugin.Instance.IS_MANUAL_INVINCIBLE)
             {
-                var go = new GameObject("InfoText");
-                UnityEngine.GameObject.DontDestroyOnLoad(go);
-                infoText = go.AddComponent<TMPro.TextMeshProUGUI>();
+                GameManager.Instance.player.isTeleporting = false;
+                Plugin.Instance.IS_MANUAL_INVINCIBLE = false;
             }
 
-            if (infoText == null)
+            if (infoText != null)
             {
-                yield break;
+                infoText.enabled = false;
             }
-
-            GameManager.Instance.player.isTeleporting = true;
-            Plugin.Instance.IS_MANUAL_INVINCIBLE = true;
-
-            infoText.enabled = true;
-            infoText.transform.SetParent(UiManager.Instance.encounterWindows.transform);
-            infoText.rectTransform.anchorMin = new Vector2(0, 0);
-            infoText.rectTransform.anchorMax = new Vector2(0, 0);
-            infoText.rectTransform.pivot = new Vector2(0, 0);
-            infoText.rectTransform.anchoredPosition = new Vector2(100, 100);
-            infoText.alignment = TMPro.TextAlignmentOptions.Center;
-            infoText.fontSize = 36;
-            infoText.color = Color.white;
-
-            float timer = 0.3f;
-            while (timer > 0f)
-            {
-                int seconds = Mathf.FloorToInt(timer);
-                int milliseconds = Mathf.FloorToInt((timer - seconds) * 1000);
-                infoText.text = $"You will be vulnerable in {seconds.ToString("D2")}:{milliseconds.ToString("D3")} secondes";
-                yield return null;
-                timer -= Time.deltaTime;
-
-                if (!Plugin.Instance.IS_MANUAL_INVINCIBLE)
-                {
-                    infoText.enabled = false;
-                    Plugin.Instance.NetPlayersDisplayer.Show();
-                    yield break;
-                }
-            }
-
-            GameManager.Instance.player.isTeleporting = false;
-            Plugin.Instance.IS_MANUAL_INVINCIBLE = false;
-            infoText.enabled = false;
 
             Plugin.Instance.NetPlayersDisplayer.Show();
         }
 
-        private static IEnumerator Wait5SecBeforeCanTakeDamageAgain(ChestWindowUi __instance)
+        private static IEnumerator InvulnerableWhileChestOpen(ChestWindowUi __instance)
         {
             if (infoText == null)
             {
@@ -221,8 +152,24 @@ namespace MegabonkTogether.Patches
             infoText.rectTransform.anchoredPosition = new Vector2(100, 100);
             infoText.alignment = TMPro.TextAlignmentOptions.Center;
             infoText.fontSize = 36;
+            infoText.color = Color.white;
+            infoText.text = "Opening chest... you are invulnerable";
 
-            float timer = 5f;
+            //Waiting for the player to click Open and for the original opening animation
+            float waited = 0f;
+            while (!isOpeningFinished && waited < MAX_OPENING_WAIT)
+            {
+                yield return null;
+                waited += Time.deltaTime;
+
+                if (!Plugin.Instance.IS_MANUAL_INVINCIBLE)
+                {
+                    infoText.enabled = false;
+                    yield break;
+                }
+            }
+
+            float timer = INVULNERABILITY_AFTER_REVEAL;
             while (timer > 0f)
             {
                 int seconds = Mathf.FloorToInt(timer);

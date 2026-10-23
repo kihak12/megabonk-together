@@ -248,6 +248,11 @@ namespace MegabonkTogether.Scripts
 
         public void ResetToLocalPlayer()
         {
+            if (isFollowingTarget)
+            {
+                Plugin.Log.LogInfo($"[Death] Camera back to local player (was spectating {targetPlayerName})");
+            }
+
             RestoreOriginalCamera();
 
             var playerCam = GameManager.Instance?.playerCamera;

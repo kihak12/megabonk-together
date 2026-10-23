@@ -18,6 +18,19 @@ namespace MegabonkTogether.Patches
         private static readonly IAutoUpdaterService autoUpdaterService = Plugin.Services.GetService<IAutoUpdaterService>();
 
         /// <summary>
+        /// Saving is allowed by the local config, unless the lobby shares the kill counter (run stats would leak into the progression)
+        /// </summary>
+        private static bool IsSavingAllowed()
+        {
+            return ModConfig.AllowSavesDuringNetplay.Value && !synchronizationService.IsSharedKillsEnabled();
+        }
+
+        private static string SkipReason()
+        {
+            return synchronizationService.IsSharedKillsEnabled() ? " (Shared Kills)" : "";
+        }
+
+        /// <summary>
         /// Prevent saving on netplay sessions unless allowed in config.
         /// </summary>
         [HarmonyPrefix]
@@ -26,9 +39,9 @@ namespace MegabonkTogether.Patches
         {
             if (synchronizationService.HasNetplaySessionInitialized() || synchronizationService.IsLoadingNextLevel())
             {
-                if (!ModConfig.AllowSavesDuringNetplay.Value)
+                if (!IsSavingAllowed())
                 {
-                    Plugin.Log.LogInfo("Skipping SaveStats during netplay session");
+                    Plugin.Log.LogInfo($"Skipping SaveStats during netplay session{SkipReason()}");
                     return false;
                 }
             }
@@ -44,9 +57,9 @@ namespace MegabonkTogether.Patches
         {
             if (synchronizationService.HasNetplaySessionInitialized() || synchronizationService.IsLoadingNextLevel())
             {
-                if (!ModConfig.AllowSavesDuringNetplay.Value)
+                if (!IsSavingAllowed())
                 {
-                    Plugin.Log.LogInfo("Skipping SaveProgression during netplay session");
+                    Plugin.Log.LogInfo($"Skipping SaveProgression during netplay session{SkipReason()}");
                     return false;
                 }
             }
@@ -62,9 +75,9 @@ namespace MegabonkTogether.Patches
         {
             if (synchronizationService.HasNetplaySessionInitialized() || synchronizationService.IsLoadingNextLevel())
             {
-                if (!ModConfig.AllowSavesDuringNetplay.Value)
+                if (!IsSavingAllowed())
                 {
-                    Plugin.Log.LogInfo("Skipping SaveConfig during netplay session");
+                    Plugin.Log.LogInfo($"Skipping SaveConfig during netplay session{SkipReason()}");
                     return false;
                 }
             }
@@ -80,9 +93,9 @@ namespace MegabonkTogether.Patches
         {
             if (synchronizationService.HasNetplaySessionInitialized() || synchronizationService.IsLoadingNextLevel())
             {
-                if (!ModConfig.AllowSavesDuringNetplay.Value)
+                if (!IsSavingAllowed())
                 {
-                    Plugin.Log.LogInfo("Skipping SaveTemp during netplay session");
+                    Plugin.Log.LogInfo($"Skipping SaveTemp during netplay session{SkipReason()}");
                     return false;
                 }
             }

@@ -44,6 +44,10 @@ namespace MegabonkTogether.Scripts
         private CustomButton sharedExpToggleLeftButton;
         private CustomButton sharedExpToggleRightButton;
         private TextMeshProUGUI sharedExpToggleStatusText;
+        private GameObject sharedKillsToggleSetting;
+        private CustomButton sharedKillsToggleLeftButton;
+        private CustomButton sharedKillsToggleRightButton;
+        private TextMeshProUGUI sharedKillsToggleStatusText;
 
         protected void Awake()
         {
@@ -231,6 +235,11 @@ namespace MegabonkTogether.Scripts
 
         private void ToggleSaveOption(bool isEnabled)
         {
+            if (isEnabled && ModConfig.EnabledSharedKills.Value)
+            {
+                return; //Saving stays off while kills are shared (the buttons are greyed, this is a safety net)
+            }
+
             ModConfig.AllowSavesDuringNetplay.Value = isEnabled;
             ModConfig.Save();
             UpdateSaveToggleStatus();
@@ -238,10 +247,38 @@ namespace MegabonkTogether.Scripts
 
         private void UpdateSaveToggleStatus()
         {
-            if (saveToggleStatusText != null)
+            if (saveToggleStatusText == null)
             {
-                saveToggleStatusText.text = ModConfig.AllowSavesDuringNetplay.Value ? "ON" : "OFF";
-                saveToggleStatusText.color = ModConfig.AllowSavesDuringNetplay.Value ? Color.green : Color.red;
+                return;
+            }
+
+            if (ModConfig.EnabledSharedKills.Value)
+            {
+                saveToggleStatusText.text = "OFF (Shared Kills)";
+                saveToggleStatusText.color = Color.red;
+                return;
+            }
+
+            saveToggleStatusText.text = ModConfig.AllowSavesDuringNetplay.Value ? "ON" : "OFF";
+            saveToggleStatusText.color = ModConfig.AllowSavesDuringNetplay.Value ? Color.green : Color.red;
+        }
+
+        /// <summary>
+        /// The save toggle can't be used while kills are shared
+        /// </summary>
+        private void RefreshSaveToggleLock()
+        {
+            var state = ModConfig.EnabledSharedKills.Value ? MyButton.EButtonState.Inactive : MyButton.EButtonState.Active;
+
+            foreach (var button in new[] { saveToggleLeftButton, saveToggleRightButton })
+            {
+                if (button == null)
+                {
+                    continue;
+                }
+
+                button.state = state;
+                button.RefreshState();
             }
         }
 
@@ -338,6 +375,109 @@ namespace MegabonkTogether.Scripts
             }
         }
 
+        private void CreateSharedKillsToggle()
+        {
+            var settings = mainMenu.settings.GetComponent<Settings>();
+            var settingPrefab = settings.GetSettingPrefab(SettingType.Enum);
+
+            sharedKillsToggleSetting = GameObject.Instantiate(settingPrefab, panel.transform);
+
+            var rectTransform = sharedKillsToggleSetting.GetComponent<RectTransform>();
+            rectTransform.anchorMin = new Vector2(0.5f, 0.5f);
+            rectTransform.anchorMax = new Vector2(0.5f, 0.5f);
+            rectTransform.pivot = new Vector2(0.5f, 0.5f);
+            rectTransform.anchoredPosition = new Vector2(0, -125);
+            rectTransform.sizeDelta = new Vector2(700, 60);
+
+            var textComponents = Il2CppFindHelper.RuntimeGetComponentsInChildren<TextMeshProUGUI>(sharedKillsToggleSetting);
+            foreach (var textComp in textComponents)
+            {
+                if (textComp.name.StartsWith("Text"))
+                {
+                    textComp.text = "Shared Kills (Host decides)\nKill counter cumulated across players\nDisables saving progression";
+                    textComp.fontSize = 18;
+                    textComp.enableWordWrapping = false;
+                }
+                else if (textComp.name.StartsWith("StatusText"))
+                {
+                    sharedKillsToggleStatusText = textComp;
+                    sharedKillsToggleStatusText.gameObject.SetActive(true);
+                    UpdateSharedKillsToggleStatus();
+                }
+            }
+
+            var buttons = Il2CppFindHelper.RuntimeGetComponentsInChildren<UnityEngine.UI.Button>(sharedKillsToggleSetting);
+            foreach (var btn in buttons)
+            {
+                if (btn.name == "B_Left")
+                {
+                    var origButton = btn.GetComponent<MyButtonNormal>();
+                    if (origButton != null)
+                    {
+                        UnityEngine.Object.DestroyImmediate(origButton);
+                    }
+
+                    btn.onClick = new();
+
+                    sharedKillsToggleLeftButton = btn.gameObject.AddComponent<CustomButton>();
+                    sharedKillsToggleLeftButton.SetOnClickAction(OnSharedKillsToggleLeftClicked);
+                }
+                else if (btn.name == "B_Right")
+                {
+                    var origButton = btn.GetComponent<MyButtonNormal>();
+                    if (origButton != null)
+                    {
+                        UnityEngine.Object.DestroyImmediate(origButton);
+                    }
+
+                    btn.onClick = new();
+
+                    sharedKillsToggleRightButton = btn.gameObject.AddComponent<CustomButton>();
+                    sharedKillsToggleRightButton.SetOnClickAction(OnSharedKillsToggleRightClicked);
+                }
+            }
+
+            sharedKillsToggleSetting.SetActive(false);
+        }
+
+        private void OnSharedKillsToggleLeftClicked()
+        {
+            AudioManager.Instance.PlaySfx(AudioManager.Instance.uiClick.sounds[0]);
+            ToggleSharedKillsOption(false);
+        }
+
+        private void OnSharedKillsToggleRightClicked()
+        {
+            AudioManager.Instance.PlaySfx(AudioManager.Instance.uiClick.sounds[0]);
+            ToggleSharedKillsOption(true);
+        }
+
+        /// <summary>
+        /// Enabling shared kills forces saving off: cumulated kills must never reach the progression
+        /// </summary>
+        private void ToggleSharedKillsOption(bool isEnabled)
+        {
+            ModConfig.EnabledSharedKills.Value = isEnabled;
+            if (isEnabled)
+            {
+                ModConfig.AllowSavesDuringNetplay.Value = false;
+            }
+            ModConfig.Save();
+
+            UpdateSharedKillsToggleStatus();
+            UpdateSaveToggleStatus();
+            RefreshSaveToggleLock();
+        }
+
+        private void UpdateSharedKillsToggleStatus()
+        {
+            if (sharedKillsToggleStatusText != null)
+            {
+                sharedKillsToggleStatusText.text = ModConfig.EnabledSharedKills.Value ? "ON" : "OFF";
+                sharedKillsToggleStatusText.color = ModConfig.EnabledSharedKills.Value ? Color.green : Color.red;
+            }
+        }
+
         private void CreateNetplayOptionsUI()
         {
             netplayOptionsTitle = new GameObject("NetplayOptionsTitle");
@@ -360,6 +500,7 @@ namespace MegabonkTogether.Scripts
 
             CreateSaveToggle();
             CreateSharedExpToggle();
+            CreateSharedKillsToggle();
 
             var backButtonObj = GameObject.Instantiate(mainMenu.btnPlay.gameObject);
             backButtonObj.transform.SetParent(panel.transform, false);
@@ -393,7 +534,7 @@ namespace MegabonkTogether.Scripts
             backRectTransform.anchorMin = new Vector2(0.5f, 0.5f);
             backRectTransform.anchorMax = new Vector2(0.5f, 0.5f);
             backRectTransform.pivot = new Vector2(0.5f, 0.5f);
-            backRectTransform.anchoredPosition = new Vector2(0, -200f);
+            backRectTransform.anchoredPosition = new Vector2(0, -220f); //Below the third toggle row
             backRectTransform.sizeDelta = new Vector2(300, 70);
 
             netplayOptionsBackButton.gameObject.SetActive(false);
@@ -934,6 +1075,10 @@ namespace MegabonkTogether.Scripts
 
             UpdateModalContents(false);
             UpdateNetplayOptionsUI(true);
+
+            //Refresh with the objects active: the save row depends on the shared kills option
+            UpdateSaveToggleStatus();
+            RefreshSaveToggleLock();
         }
 
         private void OnNetplayOptionsBackClicked()
@@ -991,6 +1136,7 @@ namespace MegabonkTogether.Scripts
             netplayOptionsTitle.SetActive(isVisible);
             saveToggleSetting.SetActive(isVisible);
             sharedExpToggleSetting.SetActive(isVisible);
+            sharedKillsToggleSetting.SetActive(isVisible);
             netplayOptionsBackButton.gameObject.SetActive(isVisible);
         }
 

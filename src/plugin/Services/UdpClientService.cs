@@ -724,6 +724,9 @@ namespace MegabonkTogether.Services
                     case GoldChanged goldChanged:
                         EventManager.OnGoldChanged(goldChanged);
                         break;
+                    case XpSync xpSync:
+                        EventManager.OnXpSync(xpSync);
+                        break;
                     default:
                         Plugin.Log.LogWarning($"Unknown message type received. message={message}");
                         break;
@@ -986,6 +989,7 @@ namespace MegabonkTogether.Services
                         break;
                     case EncounterClosed encounterClosed:
                         encounterService.AddClosedEncounterForPlayer(encounterClosed.OwnerId);
+                        encounterService.StartTimeout();
 
                         if (encounterService.IsClosable())
                         {
@@ -1001,6 +1005,10 @@ namespace MegabonkTogether.Services
                     case GoldChanged goldChanged:
                         EventManager.OnGoldChanged(goldChanged);
                         SendToAllClientsExcept(netPeerId, goldChanged.OwnerId, goldChanged);
+                        break;
+                    case XpSync xpSync:
+                        EventManager.OnXpSync(xpSync);
+                        SendToAllClientsExcept(netPeerId, xpSync.OwnerId, xpSync);
                         break;
                     default:
                         Plugin.Log.LogWarning($"Unknown message type received {message}");
@@ -1102,6 +1110,13 @@ namespace MegabonkTogether.Services
             {
                 Plugin.Instance.Mode.EnabledSharedExperience = enabledSharedExperience;
             }
+
+            if (!Plugin.Instance.Mode.EnabledSharedKills.HasValue)
+            {
+                Plugin.Instance.Mode.EnabledSharedKills = matchInfo.EnabledSharedKills; //The host's value, copied by the server
+            }
+
+            Plugin.Log.LogInfo($"[Lobby] Shared Experience: {Plugin.Instance.Mode.EnabledSharedExperience}, Shared Kills: {Plugin.Instance.Mode.EnabledSharedKills}");
 
             var allPlayers = playerManagerService.GetAllPlayers();
             foreach (var peer in matchInfo.Peers)

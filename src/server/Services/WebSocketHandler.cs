@@ -125,7 +125,7 @@ namespace MegabonkTogether.Server.Services
             }
         }
 
-        public async Task HandleRandomClientAsync(WebSocket ws, string? remoteAddress, int remoteWSPort, bool enabledSharedExperience, CancellationToken token)
+        public async Task HandleRandomClientAsync(WebSocket ws, string? remoteAddress, int remoteWSPort, bool enabledSharedExperience, bool enabledSharedKills, CancellationToken token)
         {
             var id = ConnectionIdPool.NewId();
 
@@ -134,7 +134,8 @@ namespace MegabonkTogether.Server.Services
                 Socket = ws,
                 QueueId = "random",
                 Id = id,
-                EnabledSharedExperience = enabledSharedExperience
+                EnabledSharedExperience = enabledSharedExperience,
+                EnabledSharedKills = enabledSharedKills
             };
 
             clients[id] = client;
@@ -222,6 +223,7 @@ namespace MegabonkTogether.Server.Services
             string code,
             string name,
             bool enabledSharedExperience,
+            bool enabledSharedKills,
             CancellationToken token)
         {
             var id = ConnectionIdPool.NewId();
@@ -239,7 +241,8 @@ namespace MegabonkTogether.Server.Services
                 Id = id,
                 Role = role,
                 Name = name,
-                EnabledSharedExperience = enabledSharedExperience
+                EnabledSharedExperience = enabledSharedExperience,
+                EnabledSharedKills = enabledSharedKills
             };
 
             clients[id] = client;
@@ -493,7 +496,8 @@ namespace MegabonkTogether.Server.Services
                     Name = c.Name
                 }).ToList(),
                 Seed = lobby.Seed,
-                EnabledSharedExperience = lobby.Host.EnabledSharedExperience
+                EnabledSharedExperience = lobby.Host.EnabledSharedExperience,
+                EnabledSharedKills = lobby.Host.EnabledSharedKills
             };
 
             logger.LogInformation($"Friendlies match created: host={lobby.Host.Id}, client={client.Id}, seed={lobby.Seed}");
@@ -650,7 +654,8 @@ namespace MegabonkTogether.Server.Services
                     HostConnectionId = host.Id
                 }).ToList(),
                 Seed = (uint)Random.Shared.Next(),
-                EnabledSharedExperience = host.EnabledSharedExperience
+                EnabledSharedExperience = host.EnabledSharedExperience,
+                EnabledSharedKills = host.EnabledSharedKills
             };
 
             foreach (var c in matchedClients)

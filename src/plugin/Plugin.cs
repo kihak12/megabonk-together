@@ -290,6 +290,7 @@ namespace MegabonkTogether
 
             if (netPlayer != null)
             {
+                Log.LogInfo($"[Death] Local player died, spectating {netPlayer.ConnectionId}");
                 CameraSwitcher.SwitchToTarget(netPlayer.ConnectionId);
             }
         }
