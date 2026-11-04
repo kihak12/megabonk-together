@@ -43,6 +43,16 @@ More info at [Notable Network Changes](./NETPLAY_CHANGES.md)
 <details>
 <summary>📋 Click to view full changelog</summary>
 
+### v6.0.0
+
+- 🎚️ **Difficulty (Netplay options)**: a new page with one slider per enemy stat (HP, damage, speed, elite chance, max enemies). The host's values apply to the whole lobby and are shown when the match is found
+- 📶 **Player pings**: every player card now shows a ping, including other clients and relayed connections
+- 🤝 **Shared Kills (Netplay options)**: kills, elite kills and boss kills can be cumulated across the whole lobby. Decided by the host
+- 🔄 **XP sync**: a Sync XP button in the pause menu to realign levels when players get out of sync (Shared Experience)
+- 👾 **Enemies scale with the player count**: more HP, damage, speed and elite chance per additional player, on top of the stage multiplier
+- 🔧 **Stability fixes**: chest windows and encounters no longer wait forever for a missing player, pickups and XP gained while teleporting are handled correctly
+- 🖥️ **Server**: better metrics and cleanup of stale relay sessions. This build requires the matching server (new wire format)
+
 ### v5.1.0
 
 - 🚀 **More code optimizations one more time !**
