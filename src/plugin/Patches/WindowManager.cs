@@ -5,6 +5,7 @@ using MegabonkTogether.Common.Models;
 using MegabonkTogether.Configuration;
 using MegabonkTogether.Helpers;
 using MegabonkTogether.Patches.Enemies;
+using MegabonkTogether.Patches.Unity;
 using MegabonkTogether.Scripts;
 using MegabonkTogether.Scripts.Button;
 using MegabonkTogether.Services;
@@ -39,6 +40,8 @@ namespace MegabonkTogether.Patches
         [HarmonyPatch(nameof(WindowManager.WindowOpened))]
         public static void WindowOpened_Postfix(Window newWindow)
         {
+            UnityButtonPatches.OnWindowOpened();
+
             if (newWindow.name == "Menu")
             {
                 EnemyPatch.EnemiesDistanceThrottler.ClearAll();

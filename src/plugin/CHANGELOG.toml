@@ -6,6 +6,11 @@
 #     "Change 2 description",
 # ]
 
+[version."6.1.1"]
+changes = [
+    "Reward windows: the confirm key (Space, Enter, gamepad A) is ignored for 1 second after a window opens, so a jump no longer picks a level up or a reward by accident. Mouse clicks are not delayed. The delay can be changed with WindowConfirmDelay in the config file (0 to disable)",
+]
+
 [version."6.1.0"]
 changes = [
     "Stage timer: the stage and run timers now follow the host. They are realigned every 5 seconds, and a SYNC TIMER button in the pause menu does it right away",

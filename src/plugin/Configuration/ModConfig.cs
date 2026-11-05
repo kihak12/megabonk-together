@@ -24,6 +24,10 @@ namespace MegabonkTogether.Configuration
         /// </summary>
         public static IReadOnlyDictionary<DifficultyStat, ConfigEntry<float>> Difficulty { get; private set; }
         public static ConfigEntry<bool> ForceRelay { get; private set; }
+        /// <summary>
+        /// Seconds during which the confirm key is ignored after a window opens mid-run. Local to each player
+        /// </summary>
+        public static ConfigEntry<float> WindowConfirmDelay { get; private set; }
 
         public static void Initialize(ConfigFile config)
         {
@@ -88,6 +92,15 @@ namespace MegabonkTogether.Configuration
                 "EnabledSharedKills",
                 false,
                 "Share the kill counter (HUD and end of run stats) across all players. Decided by the host for the whole lobby. Forces AllowSavesDuringNetplay off."
+            );
+            WindowConfirmDelay = config.Bind(
+                "Gameplay",
+                "WindowConfirmDelay",
+                1f,
+                new ConfigDescription(
+                    "Seconds during which the confirm key (Space, Enter, gamepad A) is ignored after a window opens during a netplay game (level up, chest, shrine...), so that a jump does not pick a reward by accident. Mouse clicks are never delayed. 0 to disable.",
+                    new AcceptableValueRange<float>(0f, 3f)
+                )
             );
             var difficultyEntries = new Dictionary<DifficultyStat, ConfigEntry<float>>();
             foreach (var stat in DifficultyRange.Stats)

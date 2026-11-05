@@ -43,6 +43,10 @@ More info at [Notable Network Changes](./NETPLAY_CHANGES.md)
 <details>
 <summary>📋 Click to view full changelog</summary>
 
+### v6.1.1
+
+- ⌨️ **Reward windows**: the confirm key (Space, Enter, gamepad A) is ignored for 1 second after a window opens, so a jump no longer picks a level up or a reward by accident. Mouse clicks are not delayed. The delay can be changed with `WindowConfirmDelay` in the config file (0 to disable)
+
 ### v6.1.0
 
 - ⏱️ **Stage timer**: the stage and run timers now follow the host. They are realigned every 5 seconds, and a SYNC TIMER button in the pause menu does it right away

@@ -33,6 +33,11 @@ You get i-frames when leveling up/getting a reward/openning a chest. This is to 
 > [!NOTE]  
 > You can also still move behind when selecting a reward
 
+### Confirm key when a window opens
+
+The confirm key is also the jump key (Space, A on a gamepad), so a player chaining jumps could pick a reward before even seeing the window. During a netplay game the confirm key (Space, Enter, gamepad A) is ignored for 1 second after a window opens (level up, chest, shrine, ...). Mouse clicks and the number keys are not delayed, and the pause menu is not concerned.
+The delay is local to each player: `WindowConfirmDelay` in the `[Gameplay]` section of the config file, from 0 (disabled) to 3 seconds.
+
 ### Changing stage
 
 Everyone is teleported as soon as one player takes the portal. A chest opened at that very moment (picked up or bought) is not lost: in shared experience every player gets it, at the start of the next stage for those who were already teleporting. While teleporting, a player can't start a new interaction (chest to buy, shrine, ...) in shared experience, because the others could not get it anymore.
