@@ -33,6 +33,9 @@ namespace MegabonkTogether.Services
             { ("MegabonkTogether", "XpSync"), "XP sync" },
             { ("MegabonkTogether", "XpSyncRequestedDesc"), "Asked the other players to synchronize XP" },
             { ("MegabonkTogether", "XpSyncedDesc"), "XP synchronized with {0}: now level {1}" },
+            { ("MegabonkTogether", "TimerSync"), "Timer sync" },
+            { ("MegabonkTogether", "TimerSyncSentDesc"), "Stage timer sent to the other players" },
+            { ("MegabonkTogether", "TimerSyncedDesc"), "Stage timer aligned on the host ({0}s off)" },
             { ("MegabonkTogether", "LobbyDifficulty"), "Difficulty" },
             { ("MegabonkTogether", "LobbyDifficultyDesc"), "Lobby difficulty: {0}" }
         };

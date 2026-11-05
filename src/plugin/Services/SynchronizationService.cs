@@ -152,6 +152,16 @@ namespace MegabonkTogether.Services
         public void RequestXpSync();
 
         /// <summary>
+        /// Align the game clocks (stage timer, run timer...) on the host's right away (pause menu button)
+        /// </summary>
+        public void RequestTimerSync();
+
+        /// <summary>
+        /// Host: send the game clocks to the clients every few seconds while a stage is running. Called from the network tick
+        /// </summary>
+        public void SendTimerSyncIfDue();
+
+        /// <summary>
         /// Consume one reward that only the local player got (level ups given by an xp sync).
         /// Nobody else is waiting for it, so the encounter must not block on the other players
         /// </summary>
@@ -189,6 +199,14 @@ namespace MegabonkTogether.Services
         private float lastXpSyncRequestTime = -XP_SYNC_REQUEST_COOLDOWN;
         private const float XP_SYNC_REQUEST_COOLDOWN = 3f;
         private const float XP_SYNC_STAGE_START_DELAY = 2f;
+        private float lastTimerSyncRequestTime = -TIMER_SYNC_REQUEST_COOLDOWN;
+        private float lastTimerSyncSentTime = 0f;
+        private const float TIMER_SYNC_REQUEST_COOLDOWN = 3f;
+        private const float TIMER_SYNC_INTERVAL = 5f; //Host: real time seconds between two periodic sends. A client drifts by (1 - host speed) x this in between
+        private const float TIMER_SYNC_TOLERANCE = 0.5f; //Client: a periodic sync is ignored under this gap (seconds), so network jitter never moves the clocks
+        private const float TIMER_SYNC_NOTABLE_GAP = 2f; //Client: a periodic correction above this gap is logged at info level
+        private readonly List<Assets.Scripts.UI.InGame.Rewards.EEncounter> pendingSharedChestEncounters = []; //Shared experience: chests opened by someone else while this player was changing stage, given once the stage has started
+        private const float PENDING_CHEST_ENCOUNTER_DELAY = 2f; //Real time seconds after the stage start, so the player is out of the portal
 
         private CancellationTokenSource cancellationTokenSource = new();
         private CancellationToken cancellationToken = default;
@@ -279,6 +297,7 @@ namespace MegabonkTogether.Services
             EventManager.SubscribeCloseEncounterEvents(OnReceivedCloseEncounter);
             EventManager.SubscribeGoldChangedEvents(OnReceivedChangeGold);
             EventManager.SubscribeXpSyncEvents(OnReceivedXpSync);
+            EventManager.SubscribeTimerSyncEvents(OnReceivedTimerSync);
 
             encounterService.TimedOut += OnEncounterWaitTimedOut;
 
@@ -330,6 +349,8 @@ namespace MegabonkTogether.Services
             PrepareForNextLevel();
             playerManagerService.Reset();
             enemyManagerService.ResetReviverSpawnCounts();
+            chestManagerService.Reset();
+            pendingSharedChestEncounters.Clear();
 
             Plugin.Instance.HasDungeonTimerStarted = false;
 
@@ -337,6 +358,8 @@ namespace MegabonkTogether.Services
             encounterService.ClearClosedEncounters(); //A session left mid-encounter must not leak closed players (or a forced close) into the next one
             localOnlyEncounters = 0;
             lastXpSyncRequestTime = -XP_SYNC_REQUEST_COOLDOWN;
+            lastTimerSyncRequestTime = -TIMER_SYNC_REQUEST_COOLDOWN;
+            lastTimerSyncSentTime = 0f;
 
             ResetGateFlags();
         }
@@ -634,6 +657,14 @@ namespace MegabonkTogether.Services
                 {
                     CoroutineRunner.Instance.Run(StageStartXpSyncRoutine());
                 }
+            }
+
+            PauseMenuHelper.AddSyncTimerButton(RequestTimerSync); //Under the Sync XP button when there is one
+            lastTimerSyncSentTime = Time.unscaledTime; //Host: first periodic sync one interval after the stage start
+
+            if (pendingSharedChestEncounters.Count > 0)
+            {
+                CoroutineRunner.Instance.Run(PendingChestEncountersRoutine());
             }
         }
 
@@ -2148,6 +2179,9 @@ namespace MegabonkTogether.Services
                 logger.LogWarning("Chest not found in ChestManagerService when processing OnChestOpened.");
                 return;
             }
+
+            chestManagerService.MarkOpened(chestSpawned.Key); //If another player opens it at the same time, their message must not give it a second time
+
             IGameNetworkMessage message = new ChestOpened
             {
                 ChestId = chestSpawned.Key,
@@ -2167,20 +2201,84 @@ namespace MegabonkTogether.Services
 
         private void OnReceivedChestOpened(ChestOpened opened)
         {
-            var chestObject = chestManagerService.GetChest(opened.ChestId);
-            if (chestObject == null)
+            if (chestManagerService.WasOpened(opened.ChestId))
             {
-                logger.LogWarning("Chest object not found in ChestManagerService when processing OnReceivedChestOpened.");
-                return;
+                return; //Already handled: the opener's trigger fires for several frames, or the local player opened it too
             }
+
+            var chestObject = chestManagerService.GetChest(opened.ChestId);
+            if (chestObject != null)
+            {
+                GameObject.DestroyImmediate(chestObject);
+            }
+            else
+            {
+                //Chest ids are never reused, so this chest belongs to a stage this player already left: it was opened while the team
+                //was changing stage. There is nothing to remove here, but in shared experience the reward is still for everyone,
+                //otherwise the player who opened it waits for players that never got it
+                logger.LogInfo($"[Chest] Chest {opened.ChestId} opened by player {opened.OwnerId} is not on this stage (opened while changing stage)");
+            }
+
+            chestManagerService.RemoveChest(opened.ChestId); //Also remembers it as opened
 
             if (IsSharedExperienceEnabled())
             {
-                UiManager.Instance.encounterWindows.AddEncounter(Assets.Scripts.UI.InGame.Rewards.EEncounter.ChestNormal);
+                AddSharedChestEncounter(Assets.Scripts.UI.InGame.Rewards.EEncounter.ChestNormal);
+            }
+        }
+
+        /// <summary>
+        /// Shared experience: give the local player the chest someone else opened.
+        /// Kept for the start of the next stage when it arrives while this player is still loading it
+        /// </summary>
+        private void AddSharedChestEncounter(Assets.Scripts.UI.InGame.Rewards.EEncounter chestEncounter)
+        {
+            if (currentState != State.Started || UiManager.Instance == null || UiManager.Instance.encounterWindows == null)
+            {
+                pendingSharedChestEncounters.Add(chestEncounter);
+                logger.LogInfo($"[Chest] Stage not started yet, {pendingSharedChestEncounters.Count} shared chest(s) kept for its start");
+                return;
             }
 
-            GameObject.DestroyImmediate(chestObject);
-            chestManagerService.RemoveChest(opened.ChestId);
+            UiManager.Instance.encounterWindows.AddEncounter(chestEncounter);
+        }
+
+        /// <summary>
+        /// The reward window matching a chest bought on the map (the game's EChest value sent by the buyer)
+        /// </summary>
+        private static Assets.Scripts.UI.InGame.Rewards.EEncounter ToChestEncounter(int chestType)
+        {
+            return (EChest)chestType switch
+            {
+                EChest.Corrupt => Assets.Scripts.UI.InGame.Rewards.EEncounter.ChestEvil,
+                EChest.Free => Assets.Scripts.UI.InGame.Rewards.EEncounter.ChestFree,
+                EChest.FreeCrypt => Assets.Scripts.UI.InGame.Rewards.EEncounter.ChestFreeCrypt,
+                EChest.Ghost => Assets.Scripts.UI.InGame.Rewards.EEncounter.ChestGhost,
+                _ => Assets.Scripts.UI.InGame.Rewards.EEncounter.ChestNormal,
+            };
+        }
+
+        private IEnumerator PendingChestEncountersRoutine()
+        {
+            yield return new WaitForSecondsRealtime(PENDING_CHEST_ENCOUNTER_DELAY);
+
+            if (currentState != State.Started)
+            {
+                yield break; //Kept for the next stage start
+            }
+
+            var pending = pendingSharedChestEncounters.ToList();
+            pendingSharedChestEncounters.Clear();
+
+            if (pending.Count > 0)
+            {
+                logger.LogInfo($"[Chest] Giving {pending.Count} shared chest(s) opened while changing stage");
+            }
+
+            foreach (var chestEncounter in pending)
+            {
+                AddSharedChestEncounter(chestEncounter);
+            }
         }
 
         public void OnWeaponAdded(WeaponInventory instance, WeaponData weaponData, Il2CppSystem.Collections.Generic.List<StatModifier> upgradeOffer)
@@ -2436,6 +2534,8 @@ namespace MegabonkTogether.Services
                 }
             }
 
+            var boughtChest = instance.GetComponentInChildren<InteractableChest>();
+
             IGameNetworkMessage message = new InteractableUsed
             {
                 NetplayId = netplayId.HasValue ? netplayId.Value : 0,
@@ -2444,7 +2544,9 @@ namespace MegabonkTogether.Services
                 IsFinalPortal = isFinalPortal,
                 IsCryptKey = isCryptKey,
                 OwnerId = playerManagerService.GetLocalPlayer().ConnectionId,
-                IsMicrowaveAndHaveItem = instance.GetComponentInChildren<InteractableMicrowave>()?.hasItem ?? false
+                IsMicrowaveAndHaveItem = instance.GetComponentInChildren<InteractableMicrowave>()?.hasItem ?? false,
+                IsChest = boughtChest != null,
+                ChestType = boughtChest != null ? (int)boughtChest.chestType : 0
             };
 
             var isHost = IsServerMode() ?? false;
@@ -2592,12 +2694,24 @@ namespace MegabonkTogether.Services
                 return;
             }
 
-            var interactableObj = spawnedObjectManagerService.GetSpawnedObject(used.NetplayId);
+            //Nobody can interact before a stage has started, so a message handled while the next stage is loading waited during the teleport.
+            //It names an object of the previous stage, and object ids restart on every stage: looking it up would hit an unrelated object
+            var isFromPreviousStage = currentState == State.Loading || currentState == State.Ready;
+            var interactableObj = isFromPreviousStage ? null : spawnedObjectManagerService.GetSpawnedObject(used.NetplayId);
 
             if (interactableObj == null)
             {
                 if (IsSharedExperienceEnabled())
                 {
+                    if (isFromPreviousStage && used.IsChest)
+                    {
+                        //A chest bought while this player was already teleporting: the reward is for everyone,
+                        //and the player who bought it waits for the others to pick theirs
+                        logger.LogInfo($"[Chest] Chest bought by player {used.OwnerId} on the previous stage, kept for the start of this one");
+                        AddSharedChestEncounter(ToChestEncounter(used.ChestType));
+                        return;
+                    }
+
                     MyTime.Pause();
                     ScreenTextHelper.Show("Waiting for other player(s) choices...", new Vector2(0, -350));
                     RewardFinished();
@@ -4854,6 +4968,152 @@ namespace MegabonkTogether.Services
 
             var senderName = playerManagerService.GetPlayer(sync.OwnerId)?.Name ?? sync.OwnerId.ToString();
             Plugin.StartNotification(("MegabonkTogether", "XpSync"), ("MegabonkTogether", "XpSyncedDesc"), [senderName, playerXp.level.ToString()]);
+        }
+
+        private static int CurrentStageIndex => MapController.runConfig?.mapData.stages.IndexOf(MapController.currentStage) ?? 0;
+
+        public void RequestTimerSync()
+        {
+            if (!HasNetplaySessionStarted())
+            {
+                return;
+            }
+
+            if (Time.unscaledTime - lastTimerSyncRequestTime < TIMER_SYNC_REQUEST_COOLDOWN)
+            {
+                return;
+            }
+            lastTimerSyncRequestTime = Time.unscaledTime;
+
+            var localPlayer = playerManagerService.GetLocalPlayer();
+            if (localPlayer == null)
+            {
+                return;
+            }
+
+            if (IsServerMode() ?? false)
+            {
+                SendTimerSync(localPlayer.ConnectionId);
+                Plugin.StartNotification(("MegabonkTogether", "TimerSync"), ("MegabonkTogether", "TimerSyncSentDesc"), []);
+                return;
+            }
+
+            IGameNetworkMessage request = new TimerSync
+            {
+                OwnerId = localPlayer.ConnectionId,
+                RequesterId = localPlayer.ConnectionId,
+                IsRequest = true,
+            };
+
+            logger.LogInfo("[TimerSync] Asking the host for its clocks");
+            udpClientService.SendToHost(request, LiteNetLib.DeliveryMethod.ReliableOrdered);
+        }
+
+        public void SendTimerSyncIfDue()
+        {
+            if (currentState != State.Started || !(IsServerMode() ?? false))
+            {
+                return;
+            }
+
+            if (Time.unscaledTime - lastTimerSyncSentTime < TIMER_SYNC_INTERVAL)
+            {
+                return;
+            }
+
+            SendTimerSync(0);
+        }
+
+        /// <summary>
+        /// Host: send the game clocks to every client.
+        /// requesterId = 0 for the periodic sync (unreliable: the next one replaces a lost one),
+        /// otherwise the player who asked for it from the pause menu (reliable, applied whatever the gap)
+        /// </summary>
+        private void SendTimerSync(uint requesterId)
+        {
+            var localPlayer = playerManagerService.GetLocalPlayer();
+            if (localPlayer == null)
+            {
+                return;
+            }
+
+            lastTimerSyncSentTime = Time.unscaledTime;
+
+            IGameNetworkMessage message = new TimerSync
+            {
+                OwnerId = localPlayer.ConnectionId,
+                RequesterId = requesterId,
+                StageIndex = CurrentStageIndex,
+                StageTimer = MyTime.stageTimer,
+                RunTimer = MyTime.runTimer,
+                FinalSwarmTimer = MyTime.finalSwarmTimer,
+                DifficultyTimer = MyTime.difficultyTimer,
+            };
+
+            if (requesterId != 0)
+            {
+                logger.LogInfo($"[TimerSync] Sending stage={MyTime.stageTimer:F1}s run={MyTime.runTimer:F1}s, asked by player {requesterId}");
+            }
+
+            udpClientService.SendToAllClients(message, requesterId != 0 ? LiteNetLib.DeliveryMethod.ReliableOrdered : LiteNetLib.DeliveryMethod.Unreliable);
+        }
+
+        private void OnReceivedTimerSync(TimerSync sync)
+        {
+            var isHost = IsServerMode() ?? false;
+
+            if (sync.IsRequest)
+            {
+                if (isHost && currentState == State.Started)
+                {
+                    SendTimerSync(sync.RequesterId != 0 ? sync.RequesterId : sync.OwnerId); //To everyone: the other clients get realigned too
+                }
+                return;
+            }
+
+            if (isHost || currentState != State.Started)
+            {
+                return; //Only the host's clocks count, and only while a stage is running
+            }
+
+            if (sync.StageIndex != CurrentStageIndex)
+            {
+                return; //Late message from another stage: its clocks would end this one right away
+            }
+
+            var stageGap = Math.Abs(MyTime.stageTimer - sync.StageTimer);
+            var gap = Math.Max(
+                Math.Max(stageGap, Math.Abs(MyTime.runTimer - sync.RunTimer)),
+                Math.Max(Math.Abs(MyTime.finalSwarmTimer - sync.FinalSwarmTimer), Math.Abs(MyTime.difficultyTimer - sync.DifficultyTimer))
+            );
+
+            var isForced = sync.RequesterId != 0;
+            if (!isForced && gap < TIMER_SYNC_TOLERANCE)
+            {
+                return;
+            }
+
+            var message = $"[TimerSync] Aligned on the host: stage {MyTime.stageTimer:F1}s -> {sync.StageTimer:F1}s, run {MyTime.runTimer:F1}s -> {sync.RunTimer:F1}s (gap {gap:F1}s, {(isForced ? "requested" : "periodic")})";
+
+            //All four tick with the same clock, so they are moved together
+            MyTime.stageTimer = sync.StageTimer;
+            MyTime.runTimer = sync.RunTimer;
+            MyTime.finalSwarmTimer = sync.FinalSwarmTimer;
+            MyTime.difficultyTimer = sync.DifficultyTimer;
+
+            if (isForced || gap >= TIMER_SYNC_NOTABLE_GAP)
+            {
+                logger.LogInfo(message);
+            }
+            else
+            {
+                logger.LogDebug(message); //A host running slow gets corrected every few seconds: keep the log readable
+            }
+
+            if (isForced && sync.RequesterId == playerManagerService.GetLocalPlayer()?.ConnectionId)
+            {
+                Plugin.StartNotification(("MegabonkTogether", "TimerSync"), ("MegabonkTogether", "TimerSyncedDesc"), [stageGap.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture)]);
+            }
         }
 
         public bool ConsumeLocalOnlyEncounter()

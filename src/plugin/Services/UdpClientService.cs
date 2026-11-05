@@ -733,6 +733,9 @@ namespace MegabonkTogether.Services
                     case XpSync xpSync:
                         EventManager.OnXpSync(xpSync);
                         break;
+                    case TimerSync timerSync:
+                        EventManager.OnTimerSync(timerSync);
+                        break;
                     case LatencyProbe latencyProbe:
                         //Pure echo for the host's round trip measurement: no event, nothing applied locally
                         latencyProbe.OwnerId = selfConnectionId ?? 0;
@@ -1020,6 +1023,10 @@ namespace MegabonkTogether.Services
                     case XpSync xpSync:
                         EventManager.OnXpSync(xpSync);
                         SendToAllClientsExcept(netPeerId, xpSync.OwnerId, xpSync);
+                        break;
+                    case TimerSync timerSync:
+                        //Not relayed on purpose: only the host's clocks count, so a client's request is answered by the host itself
+                        EventManager.OnTimerSync(timerSync);
                         break;
                     case LatencyProbe latencyProbe:
                         //Not relayed on purpose: a point to point measurement, not game state. The value reaches the clients through LobbyUpdates

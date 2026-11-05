@@ -20,6 +20,13 @@ namespace MegabonkTogether.Patches
         [HarmonyPatch(nameof(DetectInteractables.TryInteract))]
         public static bool TryInteract_Prefix(DetectInteractables __instance)
         {
+            if (synchronizationService.IsLoadingNextLevel() && synchronizationService.IsSharedExperienceEnabled())
+            {
+                //Teleporting to the next stage: the objects of this stage are already forgotten, so the interaction can't be sent.
+                //It would give a reward only this player has, who would then wait for players that never got it
+                return false;
+            }
+
             if (!synchronizationService.HasNetplaySessionStarted())
             {
                 return true;

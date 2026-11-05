@@ -106,6 +106,7 @@ namespace MegabonkTogether.Scripts
                     {
                         lobbyUpdateAccumulator -= lobbyUpdatetickInterval;
                         udpClientService.Update();
+                        synchronizationService.SendTimerSyncIfDue(); //Host only and self paced: the game clocks, every few seconds
                     }
 
                     if (isHost && enemyUpdateAccumulator >= enemyUpdatetickInterval)

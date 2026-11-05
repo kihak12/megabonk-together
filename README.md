@@ -43,6 +43,13 @@ More info at [Notable Network Changes](./NETPLAY_CHANGES.md)
 <details>
 <summary>📋 Click to view full changelog</summary>
 
+### v6.1.0
+
+- ⏱️ **Stage timer**: the stage and run timers now follow the host. They are realigned every 5 seconds, and a SYNC TIMER button in the pause menu does it right away
+- ⏸️ **Pause menu**: a level up or a chest arriving while the pause menu is open no longer locks it. The reward waits until the menu is closed
+- 🌀 **Changing stage (Shared Experience)**: a chest opened while another player takes the portal is given to everyone on the next stage, and no longer leaves the player who opened it waiting for the others
+- ⚠️ **Every player needs this version**: the interaction message changed
+
 ### v6.0.0
 
 - 🎚️ **Difficulty (Netplay options)**: a new page with one slider per enemy stat (HP, damage, speed, elite chance, max enemies). The host's values apply to the whole lobby and are shown when the match is found

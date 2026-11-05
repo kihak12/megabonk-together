@@ -9,6 +9,8 @@ Those change where made for balances purposes.
 
 There is no pause on netplay. Die
 
+The pause menu still opens, the world just keeps running behind it. A reward that shows up meanwhile (level up, chest, ...) waits until the menu is closed instead of popping behind it.
+
 ## Synchronization
 
 Most of the stuff are synchronized but some are per player while other are fully sychronized
@@ -30,6 +32,15 @@ You get i-frames when leveling up/getting a reward/openning a chest. This is to 
 
 > [!NOTE]  
 > You can also still move behind when selecting a reward
+
+### Changing stage
+
+Everyone is teleported as soon as one player takes the portal. A chest opened at that very moment (picked up or bought) is not lost: in shared experience every player gets it, at the start of the next stage for those who were already teleporting. While teleporting, a player can't start a new interaction (chest to buy, shrine, ...) in shared experience, because the others could not get it anymore.
+
+### Stage timer
+
+The game clocks (stage timer, run timer, final swarm and difficulty timers) follow the **host**. A game that struggles (low frame rate) can run its clocks slower than real time, so a player with a smooth game used to end up ahead of a host that was lagging, and the final swarm did not start at the same moment for everyone.
+The host now sends its clocks every 5 seconds and a client realigns as soon as it is more than half a second off. A **Sync timer** button in the pause menu forces it right away: pressed by the host it sends the clocks to everyone, pressed by a client it asks the host for them.
 
 ## Disabled Save/Steam interaction
 

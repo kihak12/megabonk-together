@@ -12,6 +12,8 @@ namespace MegabonkTogether.Common.Messages
         public bool IsCryptKey { get; set; }
         public uint OwnerId { get; set; }
         public bool IsMicrowaveAndHaveItem { get; set; }
+        public bool IsChest { get; set; } // A chest bought on the map. Lets a player that already left the stage still get it (shared experience)
+        public int ChestType { get; set; } // The game's EChest value, only meaningful with IsChest
     }
 
     public enum InteractableAction

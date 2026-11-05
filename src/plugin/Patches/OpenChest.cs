@@ -18,7 +18,9 @@ namespace MegabonkTogether.Patches
         [HarmonyPatch(nameof(OpenChest.OnTriggerStay))]
         public static void OnTriggerStay_Postfix(Collider other, OpenChest __instance)
         {
-            if (!synchronizationService.HasNetplaySessionStarted())
+            //Also while teleporting to the next stage: the chest still opens for the local player then,
+            //and in shared experience the others must get it too or this player ends up waiting for them
+            if (!synchronizationService.IsNetplaySessionActive())
             {
                 return;
             }
